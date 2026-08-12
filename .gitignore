@@ -1,0 +1,4 @@
+# 运行时诊断日志（含本机已安装软件清单，不发布）
+uninstaller_diag.log
+log/
+*.log
