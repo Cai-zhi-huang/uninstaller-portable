@@ -1,0 +1,4 @@
+{
+    "C_Cpp.default.compilerPath": "d:/tools/llvm-mingw_64/clang++.exe",
+    "C_Cpp.default.configurationProvider": "ms-vscode.cmake-tools"
+}

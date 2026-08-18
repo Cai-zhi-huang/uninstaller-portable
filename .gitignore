@@ -1,0 +1,39 @@
+# 构建产物
+build/
+build-*/
+out/
+
+# 运行时日志（含本机软件清单，勿提交）
+*.log
+aqtinstall.log
+uninstaller_diag.log
+
+# Qt / 编译器临时文件
+*.obj
+*.o
+*.user
+
+# 生成图
+generated-images/
+
+# 系统
+.DS_Store
+Thumbs.db
+
+# 注意：直接用/ 文件夹里是可运行文件，其中的 .exe 必须保留（不被上面的 *.exe 忽略）
+!直接用/**/*.exe
+
+# 本地工具 / 辅助脚本（构建与截图等，不纳入源码仓库）
+tools/
+
+# 项目笔记（WorkBuddy 本地记忆，不入库）
+.workbuddy/
+
+# 残留文件
+nul
+
+# 历史安装器二进制产物（源码 installer/*.cpp 与 installer/build_installer.py 会保留）
+installer/*.exe
+
+# 本地 ASCII 构建目录（位于仓库外，保险起见忽略）
+build-uninstaller/

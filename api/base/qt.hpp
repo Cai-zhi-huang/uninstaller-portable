@@ -1,0 +1,24 @@
+﻿// created by: xu.bw 26.7.5
+#include <QMenu>
+#include <QLabel>
+#include <QAction>
+#include <QActionGroup>
+#include <QComboBox>
+#include <QHash>
+#include <QStringList>
+#include <QThread>
+#include <QDialog>
+#include <QMenuBar>
+#include <QTextEdit>
+#include <QLineEdit>
+#include <QStatusBar>
+#include <QStringView>
+#include <QHBoxLayout>
+#include <QPushButton>
+#include <QMessageBox>
+#include <QHeaderView>
+#include <QMainWindow>
+#include <QTableWidget>
+#include <QApplication>
+#include <QProgressBar>
+#include <QProgressDialog>

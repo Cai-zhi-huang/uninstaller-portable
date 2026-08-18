@@ -1,0 +1,11 @@
+{
+    "cmake.cmakePath": "D:/CZH720/tools/Qt/Tools/CMake_64/bin/cmake.exe",
+    "cmake.generator": "Ninja",
+    "cmake.parallelJobs": 4,
+    "cmake.configureSettings": {
+        "CMAKE_PREFIX_PATH": "D:/CZH720/tools/Qt/6.10.3/llvm-mingw_64",
+        "CMAKE_C_COMPILER": "D:/CZH720/tools/Qt/Tools/llvm-mingw1706_64/bin/clang.exe",
+        "CMAKE_CXX_COMPILER": "D:/CZH720/tools/Qt/Tools/llvm-mingw1706_64/bin/clang++.exe",
+        "CMAKE_MAKE_PROGRAM": "D:/CZH720/tools/Qt/Tools/Ninja/ninja.exe"
+    }
+}

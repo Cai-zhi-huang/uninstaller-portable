@@ -1,0 +1,27 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "CMake Configure",
+            "type": "shell",
+            "command": "D:/CZH720/tools/Qt/Tools/CMake_64/bin/cmake.exe",
+            "args": [
+                "-S", "${workspaceFolder}",
+                "-B", "${workspaceFolder}/build",
+                "-G", "MinGW Makefiles",
+                "-DCMAKE_PREFIX_PATH=D:/CZH720/tools/Qt/6.10.3/llvm-mingw_64",
+                "-DTOOLCHAIN_BIN_DIR=D:/CZH720/tools/Qt/Tools/llvm-mingw1706_64/bin"
+            ],
+            "group": "build",
+            "problemMatcher": []
+        },
+        {
+            "label": "CMake Build",
+            "type": "shell",
+            "command": "D:/CZH720/tools/Qt/Tools/CMake_64/bin/cmake.exe",
+            "args": ["--build", "${workspaceFolder}/build"],
+            "group": { "kind": "build", "isDefault": true },
+            "problemMatcher": ["$gcc"]
+        }
+    ]
+}
