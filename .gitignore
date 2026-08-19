@@ -8,6 +8,10 @@ out/
 aqtinstall.log
 uninstaller_diag.log
 
+# 软件列表缓存（本机运行时生成，含已装软件清单，勿提交）
+uninstaller_cache.json
+startup.log
+
 # 备份文件
 *.bak
 *.bak-*

@@ -13,6 +13,8 @@
 int main(int argc, char *argv[])
 {
 	QApplication app(argc, argv);
+	// 关闭最后一个窗口即退出整个程序（含后台），不残留进程
+	app.setQuitOnLastWindowClosed(true);
 
 	// 加载 exe 内嵌的程序图标（IDI_APP_ICON），作为窗口标题栏与任务栏图标
 	app.setWindowIcon(QIcon(":/appicon.ico"));

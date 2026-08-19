@@ -8,6 +8,7 @@
 #include "global.hpp"
 #include "std.hpp"
 #include "qt.hpp"
+#include <QCloseEvent>
 
 #include <vector>
 
@@ -25,7 +26,7 @@ public:
 private slots:
     bool tick(const ll& row);                   //选择检查
     void sorting();                             //排序
-    void built_list();                          //获取软件信息
+    void built_list(bool allowCache = false);   //获取软件信息（allowCache: 启动时命中1小时内缓存则跳过扫描）
     void showDetails();                         //显示详细信息
     void openFileLocation();                    //打开文件所在位置（详情/右键菜单）
     void scanResiduals();                       //扫描残留
@@ -51,6 +52,8 @@ private slots:
 
 private:
     void setupUI();
+    bool loadSoftwareCache();                   // 读取1小时内软件列表缓存，命中返回 true
+    void saveSoftwareCache();                   // 将当前软件列表写入缓存（含时间戳）
     void updateFindList();
     void loadLanguageSetting();                 //启动时从 QSettings 读取上次选择的语言
     void buildLanguageMenuItems();               //按 family 一级大区 + 二级系族构建语言菜单项
@@ -59,6 +62,7 @@ private:
     void onTableContextMenu(const QPoint& pos); // 表格右键菜单
     void showDetailDialog(int row);             // 软件详情对话框（列出信息 + 功能按钮）
     void showUpdatePopup();                     // 启动时的更新日志弹窗（一打开主界面即弹出）
+    void closeEvent(QCloseEvent* event) override; // 关闭前台即关闭整个程序（含后台），不缩托盘
     bool isCriticalSystemItem(const SoftwareInfo* sw) const; // 系统关键项（更新/驱动/系统组件）拦截
     bool doUninstall(SoftwareInfo* software);      // 执行单个卸载（不含确认/预览），单条与批量共用
 

@@ -31,6 +31,11 @@
 #include <shlobj.h>
 #include <QThread>
 #include <QVector>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QJsonArray>
+#include <QDateTime>
+#include <QCoreApplication>
 #include "systools.hpp"
 
 // 大小列专用表格项：按字节数（UserRole）排序，而不是按 "3.43 GB" / "344.02 MB" 文本排序。
@@ -766,7 +771,7 @@ void UninstallerWindow::run() {
         setTheme(m_theme);
     }
     setupUI();
-    built_list();
+    built_list(/*allowCache=*/true);   // 启动：命中1小时内缓存则跳过扫描与进度条
     loadSoftwareList();
     show();
     showUpdatePopup();   // 启动即弹出更新日志
@@ -777,7 +782,12 @@ void UninstallerWindow::fresh() {
     show();
 }
 
-void UninstallerWindow::built_list() {
+void UninstallerWindow::built_list(bool allowCache) {
+    // 启动时使用缓存：若1小时内有缓存则直接读取，跳过注册表扫描与进度条
+    if (allowCache && loadSoftwareCache()) {
+        return;
+    }
+
     m_softwareList = Registry::getAllInstalledSoftware();
     len = m_softwareList.size();
     total_size = 0;
@@ -814,7 +824,96 @@ void UninstallerWindow::built_list() {
         QApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
     }
     progress.close();
+
+    // 实时扫描完成后写缓存（供1小时内再次启动时免加载条）
+    saveSoftwareCache();
 }
+
+bool UninstallerWindow::loadSoftwareCache() {
+    const QString path = QCoreApplication::applicationDirPath() + QStringLiteral("/uninstaller_cache.json");
+    QFile f(path);
+    if (!f.open(QIODevice::ReadOnly)) return false;
+    QJsonDocument doc = QJsonDocument::fromJson(f.readAll());
+    if (doc.isNull() || !doc.isObject()) return false;
+    QJsonObject root = doc.object();
+    const qint64 ts = root.value(QStringLiteral("timestamp")).toVariant().toLongLong();
+    // 仅在1小时内有效（3600 * 1000 ms）
+    if (QDateTime::currentMSecsSinceEpoch() - ts > 3600LL * 1000LL) return false;
+    const QJsonArray items = root.value(QStringLiteral("items")).toArray();
+    if (items.isEmpty()) return false;
+
+    m_softwareList.clear();
+    m_softwareList.reserve(items.size());
+    for (const QJsonValue& v : items) {
+        const QJsonObject o = v.toObject();
+        SoftwareInfo sw;
+        sw.displayName     = o.value(QStringLiteral("displayName")).toString().toStdString();
+        sw.displayVersion  = o.value(QStringLiteral("displayVersion")).toString().toStdString();
+        sw.installDate     = o.value(QStringLiteral("installDate")).toString().toStdString();
+        sw.installLocation = o.value(QStringLiteral("installLocation")).toString().toStdString();
+        sw.uninstallString = o.value(QStringLiteral("uninstallString")).toString().toStdString();
+        sw.publisher       = o.value(QStringLiteral("publisher")).toString().toStdString();
+        sw.displayIcon     = o.value(QStringLiteral("displayIcon")).toString().toStdString();
+        sw.helpLink        = o.value(QStringLiteral("helpLink")).toString().toStdString();
+        sw.urlInfoAbout    = o.value(QStringLiteral("urlInfoAbout")).toString().toStdString();
+        sw.regPath         = o.value(QStringLiteral("regPath")).toString().toStdString();
+        sw.orgPath         = o.value(QStringLiteral("orgPath")).toString().toStdString();
+        sw.size.size       = o.value(QStringLiteral("size")).toVariant().toDouble();
+        sw.size.format_size = o.value(QStringLiteral("format_size")).toString().toStdString();
+        sw.hive            = reinterpret_cast<HKEY>(o.value(QStringLiteral("hive")).toVariant().toLongLong());
+        sw.isRunningTime     = o.value(QStringLiteral("isRunningTime")).toBool();
+        sw.isSystemComponent = o.value(QStringLiteral("isSystemComponent")).toBool();
+        sw.isWindowsInstaller = o.value(QStringLiteral("isWindowsInstaller")).toBool();
+        sw.isOrphaned        = o.value(QStringLiteral("isOrphaned")).toBool();
+        m_softwareList.push_back(sw);
+    }
+    len = static_cast<int>(m_softwareList.size());
+    total_size = filesize_t();
+    for (auto& s : m_softwareList) total_size += s.size.size;
+    return true;
+}
+
+void UninstallerWindow::saveSoftwareCache() {
+    QJsonArray items;
+    for (const auto& s : m_softwareList) {
+        QJsonObject o;
+        o[QStringLiteral("displayName")]     = QString::fromStdString(s.displayName);
+        o[QStringLiteral("displayVersion")]  = QString::fromStdString(s.displayVersion);
+        o[QStringLiteral("installDate")]     = QString::fromStdString(s.installDate);
+        o[QStringLiteral("installLocation")] = QString::fromStdString(s.installLocation);
+        o[QStringLiteral("uninstallString")] = QString::fromStdString(s.uninstallString);
+        o[QStringLiteral("publisher")]       = QString::fromStdString(s.publisher);
+        o[QStringLiteral("displayIcon")]     = QString::fromStdString(s.displayIcon);
+        o[QStringLiteral("helpLink")]        = QString::fromStdString(s.helpLink);
+        o[QStringLiteral("urlInfoAbout")]    = QString::fromStdString(s.urlInfoAbout);
+        o[QStringLiteral("regPath")]         = QString::fromStdString(s.regPath);
+        o[QStringLiteral("orgPath")]         = QString::fromStdString(s.orgPath);
+        o[QStringLiteral("size")]            = static_cast<double>(s.size.size);
+        o[QStringLiteral("format_size")]     = QString::fromStdString(s.size.format_size);
+        o[QStringLiteral("hive")]            = static_cast<qint64>(reinterpret_cast<quintptr>(s.hive));
+        o[QStringLiteral("isRunningTime")]     = s.isRunningTime;
+        o[QStringLiteral("isSystemComponent")] = s.isSystemComponent;
+        o[QStringLiteral("isWindowsInstaller")] = s.isWindowsInstaller;
+        o[QStringLiteral("isOrphaned")]        = s.isOrphaned;
+        items.append(o);
+    }
+    QJsonObject root;
+    root[QStringLiteral("timestamp")] = QDateTime::currentMSecsSinceEpoch();
+    root[QStringLiteral("items")] = items;
+    QJsonDocument doc(root);
+    const QString path = QCoreApplication::applicationDirPath() + QStringLiteral("/uninstaller_cache.json");
+    QFile f(path);
+    if (f.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+        f.write(doc.toJson(QJsonDocument::Compact));
+    }
+}
+
+void UninstallerWindow::closeEvent(QCloseEvent* event) {
+    // 关闭前台窗口即结束整个程序（含后台），不缩到系统托盘
+    event->accept();
+    QCoreApplication::quit();
+}
+
 
 void UninstallerWindow::sorting() {
     m_swlist.clear();
