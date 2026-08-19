@@ -1466,14 +1466,16 @@ void UninstallerWindow::showUpdatePopup() {
     QTextEdit* te = new QTextEdit(&dlg);
     te->setReadOnly(true);
     te->setPlainText(QString::fromUtf8(
-        u8"• 修复带空格的卸载路径被错误截断的问题（如把 “C:\\Program Files\\...” 误判为 “C:\\Program”）\n"
-        u8"• 修复 .bat/.cmd/.ps1 等非 exe 启动器在含空格时无法正确启动\n"
-        u8"• 改进残留项检测：新增运行中进程护栏，避免误删正在使用的软件（如微信）\n"
-        u8"• 支持识别仅残留注册表项的“空壳”软件\n"
-        u8"• 修复部分软件（如 OICPP IDE）安装大小显示为 0 的问题\n"
-        u8"• 修复部分软件（如腾讯QQ）图标显示错误\n"
-        u8"• 修复扫描超大目录（如钉钉）时界面卡死（未响应）的问题\n"
-        u8"• 搜索支持中英文别名互搜（如搜“微信”可命中 WeChat，反之亦然）"
+        u8"• ① 残留文件送回收站（可撤销），失败才硬删\n"
+        u8"• ② 卸载/删残留后自动重扫并刷新列表\n"
+        u8"• ③ 表格多选 + 批量卸载 / 批量删残留\n"
+        u8"• ④ 卸载前预览弹窗（含释放空间估算）\n"
+        u8"• ⑤ 搜索增强：前缀匹配 + 拼音首字母（微信→wx）\n"
+        u8"• ⑥ 清单导出 CSV / HTML / TXT 三种格式\n"
+        u8"• ⑦ 系统关键项灰显并拦截误卸载\n"
+        u8"• ⑧ 右键「在注册表中定位」一键跳 regedit\n"
+        u8"• ⑨ 亮/暗主题切换并持久化\n"
+        u8"• ⑩ 扫描进度显示当前盘符 [扫描 D:]"
     ));
     te->setFixedHeight(230);
     layout->addWidget(te);
