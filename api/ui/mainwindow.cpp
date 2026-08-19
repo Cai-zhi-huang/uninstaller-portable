@@ -641,6 +641,101 @@ static const char* kAppStyleSheet = R"(
     QMessageBox { background-color: #202328; }
 )";
 
+// 亮色主题：与 kAppStyleSheet 结构对称，白底黑字，按钮/表格保持清晰边界。
+static const char* kLightStyleSheet = R"(
+    QMainWindow { background-color: #ffffff; }
+    QWidget#centralWidget { background-color: #ffffff; }
+
+    QMenuBar { background-color: #f2f2f2; padding: 2px; color: #1a1a1a; }
+    QMenuBar::item { padding: 4px 10px; border-radius: 4px; color: #1a1a1a; }
+    QMenuBar::item:selected { background-color: #d6d6d6; }
+    QMenuBar::item:pressed { background-color: #cccccc; }
+    QMenu { background-color: #ffffff; color: #1a1a1a; border: 1px solid #c0c0c0; }
+    QMenu::item:selected { background-color: #e6e6e6; }
+    QMenu::separator { background-color: #c0c0c0; height: 1px; margin: 4px 8px; }
+
+    QLabel { font-size: 13px; color: #1a1a1a; }
+
+    QLineEdit {
+        border: 1px solid #b0b0b0;
+        border-radius: 6px;
+        padding: 6px 10px;
+        font-size: 13px;
+        background-color: #ffffff;
+        color: #1a1a1a;
+    }
+    QLineEdit:focus { border: 1px solid #4a90d9; }
+    QLineEdit::placeholder { color: #7f8794; }
+
+    QPushButton {
+        background-color: #4a90d9;
+        color: #ffffff;
+        border: none;
+        border-radius: 6px;
+        padding: 7px 16px;
+        font-size: 13px;
+    }
+    QPushButton:hover { background-color: #5c9fe6; }
+    QPushButton:pressed { background-color: #3a7fc7; }
+
+    QPushButton#uninstallBtn { background-color: #d64a3c; }
+    QPushButton#uninstallBtn:hover { background-color: #e25b4d; }
+    QPushButton#uninstallBtn:pressed { background-color: #b84034; }
+
+    QPushButton#scanBtn,
+    QPushButton#detailsBtn,
+    QPushButton#refreshBtn { background-color: #e0e0e0; color: #1a1a1a; }
+    QPushButton#scanBtn:hover,
+    QPushButton#detailsBtn:hover,
+    QPushButton#refreshBtn:hover { background-color: #d0d0d0; }
+    QPushButton#scanBtn:pressed,
+    QPushButton#detailsBtn:pressed,
+    QPushButton#refreshBtn:pressed { background-color: #c0c0c0; }
+
+    QTableWidget {
+        background-color: #ffffff;
+        alternate-background-color: #f5f5f5;
+        gridline-color: #d0d0d0;
+        border: 1px solid #c0c0c0;
+        border-radius: 8px;
+        font-size: 13px;
+        color: #1a1a1a;
+        selection-background-color: #bcdffc;
+        selection-color: #1a1a1a;
+    }
+    QTableWidget::item {
+        padding: 5px 6px;
+        color: #1a1a1a;
+        background-color: transparent;
+    }
+    QTableWidget::item:selected {
+        background-color: #bcdffc;
+        color: #1a1a1a;
+    }
+    QHeaderView::section {
+        background-color: #e8e8e8;
+        color: #1a1a1a;
+        padding: 8px 6px;
+        border: none;
+        border-bottom: 2px solid #c0c0c0;
+        font-weight: 600;
+    }
+    QHeaderView::section:horizontal { border-right: 1px solid #c0c0c0; }
+
+    QStatusBar { background-color: #f2f2f2; color: #555555; }
+    QStatusBar::item { border: none; }
+    QDialog { background-color: #ffffff; }
+    QTextEdit {
+        background-color: #ffffff;
+        border: 1px solid #c0c0c0;
+        border-radius: 6px;
+        color: #1a1a1a;
+        font-size: 12px;
+    }
+    QCheckBox { color: #1a1a1a; }
+    QMessageBox { background-color: #ffffff; }
+)";
+
 
 UninstallerWindow::UninstallerWindow(QWidget* parent) : QMainWindow(parent) {}
 
@@ -1068,35 +1163,17 @@ void UninstallerWindow::setTheme(int t) {
 
     QString sheet;
     if (t == 1) {
-        sheet =
-            "QMainWindow, QWidget { background-color:#2b2b2b; color:#e0e0e0; }"
-            "QTableWidget { background-color:#232323; gridline-color:#3a3a3a; }"
-            "QHeaderView::section { background-color:#333333; color:#dddddd; border:1px solid #444; }"
-            "QPushButton { background-color:#3a3a3a; color:#e0e0e0; border:1px solid #555; padding:4px 10px; border-radius:3px; }"
-            "QPushButton:hover { background-color:#4a4a4a; }"
-            "QLineEdit, QComboBox, QTextEdit, QPlainTextEdit { background-color:#1f1f1f; color:#e0e0e0; border:1px solid #555; }"
-            "QMenu { background-color:#2b2b2b; color:#e0e0e0; }"
-            "QMenuBar { background-color:#2b2b2b; color:#e0e0e0; }"
-            "QCheckBox { color:#e0e0e0; }"
-            "QLabel { color:#e0e0e0; }"
-            "QProgressDialog { background-color:#2b2b2b; color:#e0e0e0; }"
-            "QProgressBar { background-color:#3a3a3a; color:#e0e0e0; border:1px solid #555; border-radius:4px; text-align:center; }"
-            "QProgressBar::chunk { background-color:#4a90e2; border-radius:2px; }";
+        sheet = QString::fromUtf8(kAppStyleSheet)
+            + QString::fromUtf8(
+                "QProgressDialog { background-color:#181a1e; color:#e0e3e8; }"
+                "QProgressBar { background-color:#202328; color:#e0e3e8; border:1px solid #3c424d; border-radius:4px; text-align:center; }"
+                "QProgressBar::chunk { background-color:#4a90e2; border-radius:2px; }");
     } else {
-        sheet =
-            "QMainWindow, QWidget { background-color:#f0f0f0; color:#1a1a1a; }"
-            "QTableWidget { background-color:#ffffff; gridline-color:#d0d0d0; }"
-            "QHeaderView::section { background-color:#e5e5e5; color:#1a1a1a; border:1px solid #c0c0c0; }"
-            "QPushButton { background-color:#e0e0e0; color:#1a1a1a; border:1px solid #b0b0b0; padding:4px 10px; border-radius:3px; }"
-            "QPushButton:hover { background-color:#d0d0d0; }"
-            "QLineEdit, QComboBox, QTextEdit, QPlainTextEdit { background-color:#ffffff; color:#1a1a1a; border:1px solid #b0b0b0; }"
-            "QMenu { background-color:#f0f0f0; color:#1a1a1a; }"
-            "QMenuBar { background-color:#f0f0f0; color:#1a1a1a; }"
-            "QCheckBox { color:#1a1a1a; }"
-            "QLabel { color:#1a1a1a; }"
-            "QProgressDialog { background-color:#f0f0f0; color:#1a1a1a; }"
-            "QProgressBar { background-color:#e0e0e0; color:#1a1a1a; border:1px solid #b0b0b0; border-radius:4px; text-align:center; }"
-            "QProgressBar::chunk { background-color:#4a90e2; border-radius:2px; }";
+        sheet = QString::fromUtf8(kLightStyleSheet)
+            + QString::fromUtf8(
+                "QProgressDialog { background-color:#ffffff; color:#1a1a1a; }"
+                "QProgressBar { background-color:#e8e8e8; color:#1a1a1a; border:1px solid #c0c0c0; border-radius:4px; text-align:center; }"
+                "QProgressBar::chunk { background-color:#4a90e2; border-radius:2px; }");
     }
     qApp->setStyleSheet(sheet);
     // 强制刷新所有已打开窗口的样式
@@ -2301,7 +2378,7 @@ void UninstallerWindow::setupUI() {
     if (m_uiBuilt) return;
     m_uiBuilt = true;
 
-    setStyleSheet(kAppStyleSheet);
+    // 样式统一由 setTheme() 通过 qApp->setStyleSheet 管理，避免此处硬编码覆盖主题。
 
     // 标题栏附带编译日期，方便区分本地旧 exe 与新构建。
     setWindowTitle(getlang(0x15).toString() + " " + appVersionFull() +
