@@ -1081,6 +1081,10 @@ void UninstallerWindow::setTheme(int t) {
             "QLabel { color:#e0e0e0; }";
     }
     qApp->setStyleSheet(sheet);
+
+    // 同步视图菜单的勾选状态（互斥单选，唯一选中当前主题）
+    if (m_lightThemeAct) m_lightThemeAct->setChecked(t == 0);
+    if (m_darkThemeAct) m_darkThemeAct->setChecked(t == 1);
 }
 
 // ③ 批量删除选中项的磁盘残留（送回收站）。
@@ -2317,15 +2321,20 @@ void UninstallerWindow::setupUI() {
 
     // ⑨ 视图/主题菜单
     m_viewMenu = bar->addMenu(QString::fromUtf8(u8"视图"));
-    QAction* lightAct = m_viewMenu->addAction(QString::fromUtf8(u8"亮色主题"));
-    QAction* darkAct = m_viewMenu->addAction(QString::fromUtf8(u8"暗色主题"));
-    lightAct->setCheckable(true);
-    darkAct->setCheckable(true);
-    connect(lightAct, &QAction::triggered, this, [this]() { setTheme(0); });
-    connect(darkAct, &QAction::triggered, this, [this]() { setTheme(1); });
-    // 启动时根据持久化的主题勾选
-    lightAct->setChecked(m_theme == 0);
-    darkAct->setChecked(m_theme == 1);
+    m_lightThemeAct = m_viewMenu->addAction(QString::fromUtf8(u8"亮色主题"));
+    m_darkThemeAct = m_viewMenu->addAction(QString::fromUtf8(u8"暗色主题"));
+    // 互斥单选：同一时刻只能勾一个（避免“亮/暗同时选中”）
+    QActionGroup* themeGroup = new QActionGroup(this);
+    themeGroup->setExclusive(true);
+    m_lightThemeAct->setActionGroup(themeGroup);
+    m_darkThemeAct->setActionGroup(themeGroup);
+    m_lightThemeAct->setCheckable(true);
+    m_darkThemeAct->setCheckable(true);
+    connect(m_lightThemeAct, &QAction::triggered, this, [this]() { setTheme(0); });
+    connect(m_darkThemeAct, &QAction::triggered, this, [this]() { setTheme(1); });
+    // 启动时根据持久化的主题勾选（唯一选中项）
+    m_lightThemeAct->setChecked(m_theme == 0);
+    m_darkThemeAct->setChecked(m_theme == 1);
 
     // 工具栏
     QHBoxLayout* toolBar = new QHBoxLayout();

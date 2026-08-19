@@ -79,6 +79,8 @@ private:
     QAction* m_aboutAction{ nullptr };
     QAction* m_locateAction{ nullptr };    // 右键“在注册表中定位”
     QAction* m_themeAction{ nullptr };     // 主题切换动作
+    QAction* m_lightThemeAct{ nullptr };   // “亮色主题”菜单项（互斥单选）
+    QAction* m_darkThemeAct{ nullptr };    // “暗色主题”菜单项（互斥单选）
     QComboBox* m_langCombo{ nullptr };   // 工具栏右侧语言下拉框
     // 语言菜单中每个语言项的 QAction，与 langCount() 一一对应（按 langIndex 索引），
     // 用于 setLanguage 直接定位无需遍历嵌套 submenu。失败/未分配的槽位保留 nullptr。
