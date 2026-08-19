@@ -1078,7 +1078,10 @@ void UninstallerWindow::setTheme(int t) {
             "QMenu { background-color:#2b2b2b; color:#e0e0e0; }"
             "QMenuBar { background-color:#2b2b2b; color:#e0e0e0; }"
             "QCheckBox { color:#e0e0e0; }"
-            "QLabel { color:#e0e0e0; }";
+            "QLabel { color:#e0e0e0; }"
+            "QProgressDialog { background-color:#2b2b2b; color:#e0e0e0; }"
+            "QProgressBar { background-color:#3a3a3a; color:#e0e0e0; border:1px solid #555; border-radius:4px; text-align:center; }"
+            "QProgressBar::chunk { background-color:#4a90e2; border-radius:2px; }";
     } else {
         sheet =
             "QMainWindow, QWidget { background-color:#f0f0f0; color:#1a1a1a; }"
@@ -1090,7 +1093,10 @@ void UninstallerWindow::setTheme(int t) {
             "QMenu { background-color:#f0f0f0; color:#1a1a1a; }"
             "QMenuBar { background-color:#f0f0f0; color:#1a1a1a; }"
             "QCheckBox { color:#1a1a1a; }"
-            "QLabel { color:#1a1a1a; }";
+            "QLabel { color:#1a1a1a; }"
+            "QProgressDialog { background-color:#f0f0f0; color:#1a1a1a; }"
+            "QProgressBar { background-color:#e0e0e0; color:#1a1a1a; border:1px solid #b0b0b0; border-radius:4px; text-align:center; }"
+            "QProgressBar::chunk { background-color:#4a90e2; border-radius:2px; }";
     }
     qApp->setStyleSheet(sheet);
     // 强制刷新所有已打开窗口的样式
