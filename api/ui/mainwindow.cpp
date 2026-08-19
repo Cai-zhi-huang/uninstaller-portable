@@ -1079,8 +1079,24 @@ void UninstallerWindow::setTheme(int t) {
             "QMenuBar { background-color:#2b2b2b; color:#e0e0e0; }"
             "QCheckBox { color:#e0e0e0; }"
             "QLabel { color:#e0e0e0; }";
+    } else {
+        sheet =
+            "QMainWindow, QWidget { background-color:#f0f0f0; color:#1a1a1a; }"
+            "QTableWidget { background-color:#ffffff; gridline-color:#d0d0d0; }"
+            "QHeaderView::section { background-color:#e5e5e5; color:#1a1a1a; border:1px solid #c0c0c0; }"
+            "QPushButton { background-color:#e0e0e0; color:#1a1a1a; border:1px solid #b0b0b0; padding:4px 10px; border-radius:3px; }"
+            "QPushButton:hover { background-color:#d0d0d0; }"
+            "QLineEdit, QComboBox, QTextEdit, QPlainTextEdit { background-color:#ffffff; color:#1a1a1a; border:1px solid #b0b0b0; }"
+            "QMenu { background-color:#f0f0f0; color:#1a1a1a; }"
+            "QMenuBar { background-color:#f0f0f0; color:#1a1a1a; }"
+            "QCheckBox { color:#1a1a1a; }"
+            "QLabel { color:#1a1a1a; }";
     }
     qApp->setStyleSheet(sheet);
+    // 强制刷新所有已打开窗口的样式
+    for (QWidget* w : QApplication::allWidgets()) {
+        if (w) { w->style()->unpolish(w); w->style()->polish(w); }
+    }
 
     // 同步视图菜单的勾选状态（互斥单选，唯一选中当前主题）
     if (m_lightThemeAct) m_lightThemeAct->setChecked(t == 0);
