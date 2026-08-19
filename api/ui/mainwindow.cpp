@@ -2352,7 +2352,7 @@ void UninstallerWindow::retranslateUI() {
     if (m_scanLabel) m_scanLabel->setText(getlang(0x24).toString());
     if (m_searchEdit) m_searchEdit->setPlaceholderText(getlang(0x22).toString());
     if (m_refreshBtn) m_refreshBtn->setText(getlang(0x23).toString());
-    if (m_orphanOnlyCheck) m_orphanOnlyCheck->setText(getlang(0x42).toString());
+    if (m_orphanOnlyCheck) m_orphanOnlyCheck->setText(QString::fromUtf8(u8"仅显示残留项"));
 
     // 表格表头
     if (m_tableWidget) {
@@ -2467,7 +2467,7 @@ void UninstallerWindow::setupUI() {
     toolBar->addWidget(m_refreshBtn);
 
     // 仅显示残留项过滤
-    m_orphanOnlyCheck = new QCheckBox(getlang(0x42).toString(), this);
+    m_orphanOnlyCheck = new QCheckBox(QString::fromUtf8(u8"仅显示残留项"), this);
     connect(m_orphanOnlyCheck, &QCheckBox::toggled, this, [this](bool on) {
         m_showOrphanOnly = on;
         filterSoftware();
