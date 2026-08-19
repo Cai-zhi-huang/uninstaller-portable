@@ -1478,15 +1478,24 @@ void UninstallerWindow::showUpdatePopup() {
     QDialog dlg(this);
     dlg.setWindowTitle(QString::fromUtf8(u8"卸载管理器 · 更新日志"));
     dlg.setMinimumWidth(480);
+    // 弹窗强制白底黑字，不跟随全局亮/暗主题
+    dlg.setStyleSheet(
+        "QDialog { background-color:#ffffff; }"
+        "QLabel { color:#1a1a1a; }"
+        "QTextEdit { background-color:#ffffff; color:#1a1a1a; border:1px solid #d0d0d0; border-radius:4px; }"
+        "QCheckBox { color:#1a1a1a; }"
+        "QCheckBox::indicator:unchecked { border:1px solid #999999; background:#ffffff; }"
+        "QPushButton { background-color:#3a6df0; color:#ffffff; border:none; border-radius:6px; padding:8px 20px; font-size:13px; }"
+        "QPushButton:hover { background-color:#4f7ef5; }");
 
     QVBoxLayout* layout = new QVBoxLayout(&dlg);
 
     QLabel* title = new QLabel(QString::fromUtf8(u8"卸载管理器 %1").arg(appVersionFull()), &dlg);
-    title->setStyleSheet("font-size:18px; font-weight:bold; color:#e6e9ee;");
+    title->setStyleSheet("font-size:18px; font-weight:bold; color:#1a1a1a;");
     layout->addWidget(title);
 
     QLabel* sub = new QLabel(QString::fromUtf8(u8"本次更新内容："), &dlg);
-    sub->setStyleSheet("color:#9da3ad;");
+    sub->setStyleSheet("color:#555555;");
     layout->addWidget(sub);
 
     QTextEdit* te = new QTextEdit(&dlg);
@@ -1507,15 +1516,10 @@ void UninstallerWindow::showUpdatePopup() {
     layout->addWidget(te);
 
     QCheckBox* cb = new QCheckBox(QString::fromUtf8(u8"不再提示此版本"), &dlg);
-    cb->setStyleSheet("color:#c9cdd3;");
     layout->addWidget(cb);
 
     QPushButton* ok = new QPushButton(QString::fromUtf8(u8"知道了"), &dlg);
     ok->setDefault(true);
-    ok->setStyleSheet(
-        "QPushButton { background-color:#3a6df0; color:#ffffff; border:none; "
-        "border-radius:6px; padding:8px 20px; font-size:13px; }"
-        "QPushButton:hover { background-color:#4f7ef5; }");
     QHBoxLayout* btnRow = new QHBoxLayout();
     btnRow->addStretch();
     btnRow->addWidget(ok);
