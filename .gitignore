@@ -8,6 +8,11 @@ out/
 aqtinstall.log
 uninstaller_diag.log
 
+# 备份文件
+*.bak
+*.bak-*
+*.old
+
 # Qt / 编译器临时文件
 *.obj
 *.o

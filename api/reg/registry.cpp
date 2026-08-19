@@ -8,6 +8,7 @@
 #include <QDir>
 #include <fstream>
 #include <tlhelp32.h>
+#include <shellapi.h>
 
 // 前向声明：normalizeCommandLineForArgv 会调用它，而它定义在下方。
 static bool splitExeAndParams(const std::wstring& cmd, std::wstring& exePath, std::wstring& params);
@@ -775,13 +776,21 @@ bool Registry::deleteResidualFiles(const std::vector<std::string>& files)
         }
         try {
             std::wstring wPath = utf8ToWide(file);
-            if (fs::exists(wPath)) {
-                if (fs::is_directory(wPath)) {
-                    fs::remove_all(wPath);
-                }
-                else {
-                    fs::remove(wPath);
-                }
+            if (!fs::exists(wPath)) continue;
+            // ① 优先送回收站（FOF_ALLOWUNDO），误删时可从回收站恢复；
+            //    SHFileOperationW 的 pFrom 必须是“双 NULL 终止”的路径列表。
+            std::wstring from = wPath;
+            from.push_back(L'\0');
+            from.push_back(L'\0');
+            SHFILEOPSTRUCTW op = { 0 };
+            op.wFunc = FO_DELETE;
+            op.pFrom = from.c_str();
+            op.fFlags = FOF_ALLOWUNDO | FOF_NOCONFIRMATION | FOF_NOERRORUI | FOF_SILENT;
+            int r = SHFileOperationW(&op);
+            if (r != 0) {
+                // 回收站失败（如跨盘/权限）时回退硬删。
+                if (fs::is_directory(wPath)) fs::remove_all(wPath);
+                else fs::remove(wPath);
             }
         }
         catch (const std::exception& e) {

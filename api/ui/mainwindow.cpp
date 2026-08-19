@@ -664,6 +664,12 @@ void UninstallerWindow::run() {
     // 设置窗口标题栏与任务栏图标（exe 内嵌的 IDI_APP_ICON）
     setWindowIcon(QApplication::windowIcon());
     loadLanguageSetting();   // 启动前恢复上次选择的语言，setupUI 才会用正确的语言建界面
+    // ⑨ 恢复持久化的主题
+    {
+        QSettings st("Uninstaller", "uninstaller");
+        m_theme = st.value("theme", 0).toInt();
+        setTheme(m_theme);
+    }
     setupUI();
     built_list();
     loadSoftwareList();
@@ -697,11 +703,17 @@ void UninstallerWindow::built_list() {
         auto sw = &m_softwareList[i];
         sw->registryInit();
         total_size += sw->size.size;
-        progress.setLabelText(getlang(0x5u).toString()
+        // ⑩ 进度细化：显示当前正在扫描的盘符，避免“黑盒”卡顿不知卡在哪。
+        QString drive;
+        QString il = QString::fromStdString(sw->installLocation);
+        if (il.size() >= 2 && il[1] == QChar(':')) drive = il.left(2).toUpper();
+        QString label = getlang(0x5u).toString()
             .arg(QString::fromStdString(sw->displayName))
             .arg(i)
             .arg(len)
-            .arg(QString::fromStdString(total_size.get())));
+            .arg(QString::fromStdString(total_size.get()));
+        if (!drive.isEmpty()) label += QString::fromUtf8(u8"  [扫描 %1]").arg(drive);
+        progress.setLabelText(label);
         progress.setValue(i);
         // 每次处理完一个软件都泵一次事件，确保进度条/标题栏不会长时间显示“未响应”。
         QApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
@@ -849,6 +861,12 @@ void UninstallerWindow::loadSoftwareList() {
                 QFont nf = nameItem->font();
                 nameItem->setForeground(QColor(0xD9, 0x7A, 0x7A));
                 nameItem->setFont(nf);
+            } else if (isCriticalSystemItem(sw)) {
+                // ⑦ 系统关键项：灰显并标注“不建议卸载”
+                auto* statusItem = new QTableWidgetItem(QString::fromUtf8(u8"系统关键"));
+                statusItem->setForeground(QColor(0x9E, 0x9E, 0x9E));
+                m_tableWidget->setItem(i, 6, statusItem);
+                nameItem->setForeground(QColor(0x9E, 0x9E, 0x9E));
             } else {
                 m_tableWidget->setItem(i, 6, new QTableWidgetItem(QString::fromUtf8(u8"正常")));
             }
@@ -890,6 +908,21 @@ bool UninstallerWindow::tick(const ll& row) {
     return 0;
 }
 
+// 执行单个卸载（不含确认/预览），单条与批量共用。返回是否成功。
+bool UninstallerWindow::doUninstall(SoftwareInfo* software) {
+    if (!software) return false;
+    QString name = QString::fromStdString(software->displayName);
+    QProgressDialog progress(getlang(0xCu).toString().arg(name),
+        getlang(0x3u).toString(), 0, 0, this);
+    progress.setWindowModality(Qt::WindowModal);
+    progress.setMinimumDuration(0);
+    progress.show();
+    QApplication::processEvents();
+    bool success = Registry::uninstallSoftware(*software);
+    progress.close();
+    return success;
+}
+
 void UninstallerWindow::uninstallSelected() {
     int row = m_tableWidget->currentRow();
     if (tick(row))return ;
@@ -897,17 +930,27 @@ void UninstallerWindow::uninstallSelected() {
     auto software = softwareAtRow(row);
     if (!software) return;
 
+    // ⑦ 系统关键项拦截：Windows 更新 / 驱动 / 系统组件 等不允许卸载。
+    if (isCriticalSystemItem(software)) {
+        QMessageBox::critical(this, QString::fromUtf8(u8"无法卸载"),
+            QString::fromUtf8(u8"「%1」被识别为系统关键项（Windows 更新 / 驱动 / 系统组件）。\n卸载它可能导致系统不稳定，已阻止该操作。").arg(QString::fromStdString(software->displayName)));
+        return;
+    }
+
     QString name = QString::fromStdString(software->displayName);
     QString ver = QString::fromStdString(software->displayVersion);
     QString cmd = QString::fromStdString(Registry::getUninstallCommand(*software));
 
+    // ④ 卸载前预览：明确告知将要卸载的程序、版本、体积与卸载命令，确认后再执行。
     QMessageBox box(this);
     box.setIcon(QMessageBox::Question);
     box.setWindowTitle(getlang(0xAu).toString());
     box.setText(getlang(0xBu).toString().arg(name).arg(ver));
-    if (!cmd.isEmpty()) {
-        box.setInformativeText(getlang(0x38).toString() + "\n" + stripCommandQuotes(cmd));
-    }
+    QString info = getlang(0x38).toString();
+    if (!cmd.isEmpty()) info += "\n" + stripCommandQuotes(cmd);
+    info += QString::fromUtf8(u8"\n\n预计释放空间：%1").arg(QString::fromStdString(software->size.get()));
+    if (software->isOrphaned) info += QString::fromUtf8(u8"\n注意：该程序已被判定为“残留项”（卸载程序不存在），卸载操作可能仅清理注册表项。");
+    box.setInformativeText(info);
     box.setStandardButtons(QMessageBox::Yes | QMessageBox::No);
     box.setDefaultButton(QMessageBox::No);
     if (box.exec() != QMessageBox::Yes) return;
@@ -915,15 +958,7 @@ void UninstallerWindow::uninstallSelected() {
     if (m_busy) return;
     m_busy = true;
 
-    QProgressDialog progress(getlang(0xCu).toString().arg(name),
-        getlang(0x3u).toString(), 0, 0, this);
-    progress.setWindowModality(Qt::WindowModal);
-    progress.setMinimumDuration(0);
-    progress.show();
-    QApplication::processEvents();
-
-    bool success = Registry::uninstallSoftware(*software);
-    progress.close();
+    bool success = doUninstall(software);
 
     if (success) {
         QMessageBox::StandardButton result = QMessageBox::question(
@@ -933,7 +968,7 @@ void UninstallerWindow::uninstallSelected() {
         if (result == QMessageBox::Yes) {
             scanResiduals();
         }
-        // 重新扫描注册表，让列表反映真实状态（已卸载的条目会消失）
+        // ② 重新扫描注册表，让列表反映真实状态（已卸载的条目会消失）
         built_list();
         loadSoftwareList();
     }
@@ -942,6 +977,163 @@ void UninstallerWindow::uninstallSelected() {
     }
 
     m_busy = false;
+}
+
+// ③ 批量卸载：对当前所有选中行逐个卸载（跳过系统关键项），结束统一重扫。
+void UninstallerWindow::batchUninstall() {
+    QList<SoftwareInfo*> selected;
+    QList<int> rows;
+    QItemSelectionModel* sel = m_tableWidget->selectionModel();
+    if (!sel) return;
+    for (const QModelIndex& idx : sel->selectedRows()) {
+        int r = idx.row();
+        auto sw = softwareAtRow(r);
+        if (sw) { rows.append(r); selected.append(sw); }
+    }
+    if (selected.isEmpty()) {
+        QMessageBox::information(this, QString::fromUtf8(u8"批量卸载"), QString::fromUtf8(u8"请先按住 Ctrl / Shift 在列表中选择要卸载的软件。"));
+        return;
+    }
+
+    // ⑦ 过滤掉系统关键项并提示
+    QStringList blocked;
+    QList<SoftwareInfo*> toUninstall;
+    filesize_t totalSize;
+    for (auto sw : selected) {
+        if (isCriticalSystemItem(sw)) blocked.append(QString::fromStdString(sw->displayName));
+        else { toUninstall.append(sw); totalSize += sw->size.size; }
+    }
+    if (toUninstall.isEmpty()) {
+        QMessageBox::critical(this, QString::fromUtf8(u8"无法卸载"), QString::fromUtf8(u8"所选条目均为系统关键项，已阻止批量卸载。"));
+        return;
+    }
+
+    // ④ 批量预览：列出将卸载的程序与合计释放空间
+    QString preview = QString::fromUtf8(u8"即将批量卸载 %1 个程序，预计释放空间：%2\n\n").arg(toUninstall.size()).arg(QString::fromStdString(totalSize.get()));
+    for (auto sw : toUninstall) {
+        preview += "• " + QString::fromStdString(sw->displayName) + "\n";
+    }
+    if (!blocked.isEmpty()) {
+        preview += QString::fromUtf8(u8"\n已跳过 %1 个系统关键项：\n").arg(blocked.size());
+        for (const QString& b : blocked) preview += "• " + b + "\n";
+    }
+    QMessageBox box(this);
+    box.setIcon(QMessageBox::Warning);
+    box.setWindowTitle(QString::fromUtf8(u8"批量卸载预览"));
+    box.setText(QString::fromUtf8(u8"确认批量卸载以下程序？此操作不可撤销。"));
+    box.setDetailedText(preview);
+    box.setStandardButtons(QMessageBox::Yes | QMessageBox::No);
+    box.setDefaultButton(QMessageBox::No);
+    if (box.exec() != QMessageBox::Yes) return;
+
+    if (m_busy) return;
+    m_busy = true;
+    int ok = 0;
+    for (auto sw : toUninstall) {
+        if (doUninstall(sw)) ++ok;
+    }
+    m_busy = false;
+
+    QMessageBox::information(this, QString::fromUtf8(u8"批量卸载完成"),
+        QString::fromUtf8(u8"成功卸载 %1 / %2 个程序。").arg(ok).arg(toUninstall.size()));
+
+    // ② 统一重扫
+    built_list();
+    loadSoftwareList();
+}
+
+// ⑧ 在注册表中定位：写入 LastKey 再启动 regedit，使其自动跳转到该卸载项。
+void UninstallerWindow::locateInRegistry() {
+    int row = m_tableWidget->currentRow();
+    if (tick(row)) return;
+    auto sw = softwareAtRow(row);
+    if (!sw) return;
+
+    QString hiveName = (sw->hive == HKEY_LOCAL_MACHINE) ? "HKEY_LOCAL_MACHINE" : "HKEY_CURRENT_USER";
+    QString key = hiveName + "\\" + QString::fromStdString(sw->regPath);
+
+    // 若 regedit 已打开，先关闭以使其重新读取 LastKey。
+    QProcess::execute("taskkill", QStringList() << "/IM" << "regedit.exe" << "/F");
+    QSettings lastKey("HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Applets\\Regedit",
+                      QSettings::NativeFormat);
+    lastKey.setValue("LastKey", key);
+    QProcess::startDetached("regedit.exe");
+}
+
+// ⑨ 切换亮/暗主题并持久化。
+void UninstallerWindow::setTheme(int t) {
+    m_theme = t;
+    QSettings s("Uninstaller", "uninstaller");
+    s.setValue("theme", t);
+
+    QString sheet;
+    if (t == 1) {
+        sheet =
+            "QMainWindow, QWidget { background-color:#2b2b2b; color:#e0e0e0; }"
+            "QTableWidget { background-color:#232323; gridline-color:#3a3a3a; }"
+            "QHeaderView::section { background-color:#333333; color:#dddddd; border:1px solid #444; }"
+            "QPushButton { background-color:#3a3a3a; color:#e0e0e0; border:1px solid #555; padding:4px 10px; border-radius:3px; }"
+            "QPushButton:hover { background-color:#4a4a4a; }"
+            "QLineEdit, QComboBox, QTextEdit, QPlainTextEdit { background-color:#1f1f1f; color:#e0e0e0; border:1px solid #555; }"
+            "QMenu { background-color:#2b2b2b; color:#e0e0e0; }"
+            "QMenuBar { background-color:#2b2b2b; color:#e0e0e0; }"
+            "QCheckBox { color:#e0e0e0; }"
+            "QLabel { color:#e0e0e0; }";
+    }
+    qApp->setStyleSheet(sheet);
+}
+
+// ③ 批量删除选中项的磁盘残留（送回收站）。
+void UninstallerWindow::batchDeleteResiduals() {
+    QItemSelectionModel* sel = m_tableWidget->selectionModel();
+    if (!sel) return;
+    QList<SoftwareInfo*> selected;
+    for (const QModelIndex& idx : sel->selectedRows()) {
+        auto sw = softwareAtRow(idx.row());
+        if (sw) selected.append(sw);
+    }
+    if (selected.isEmpty()) {
+        QMessageBox::information(this, QString::fromUtf8(u8"批量删除残留"),
+            QString::fromUtf8(u8"请先按住 Ctrl / Shift 在列表中选择要清理残留的软件。"));
+        return;
+    }
+
+    // 先汇总所有残留
+    std::vector<std::string> allResiduals;
+    for (auto sw : selected) {
+        auto r = Registry::scanResidualFiles(*sw, sw->isOrphaned);
+        for (const auto& f : r) allResiduals.push_back(f);
+    }
+    if (allResiduals.empty()) {
+        QMessageBox::information(this, QString::fromUtf8(u8"批量删除残留"),
+            QString::fromUtf8(u8"所选软件的磁盘残留均已清理，没有发现新的残留文件。"));
+        return;
+    }
+
+    QMessageBox box(this);
+    box.setIcon(QMessageBox::Question);
+    box.setWindowTitle(QString::fromUtf8(u8"批量删除残留预览"));
+    box.setText(QString::fromUtf8(u8"即将删除 %1 个残留文件/目录（送回收站）。确认吗？").arg(allResiduals.size()));
+    box.setStandardButtons(QMessageBox::Yes | QMessageBox::No);
+    box.setDefaultButton(QMessageBox::No);
+    if (box.exec() != QMessageBox::Yes) return;
+
+    if (m_busy) return;
+    m_busy = true;
+    bool ok = Registry::deleteResidualFiles(allResiduals);
+    m_busy = false;
+
+    if (ok) {
+        QMessageBox::information(this, QString::fromUtf8(u8"已完成"),
+            QString::fromUtf8(u8"已删除 %1 个残留文件/目录（已送回收站，可恢复）。").arg(allResiduals.size()));
+        // ② 重扫
+        built_list();
+        loadSoftwareList();
+    } else {
+        QString hint = informat::diagnoseDeleteFailure(allResiduals);
+        QMessageBox::warning(this, getlang(0xFu).toString(),
+            getlang(0x1A).toString() + "\n\n" + hint);
+    }
 }
 
 bool UninstallerWindow::eventFilter(QObject* obj, QEvent* event) {
@@ -966,6 +1158,7 @@ void UninstallerWindow::onTableContextMenu(const QPoint& pos) {
     QAction* actOpen = menu.addAction(getlang(0x39).toString());
     menu.addSeparator();
     QAction* actCopy = menu.addAction(getlang(0x2F).toString());
+    QAction* actLocate = menu.addAction(QString::fromUtf8(u8"在注册表中定位"));
     QAction* actDelReg = menu.addAction(QString::fromUtf8(u8"删除残留注册表项"));
     QAction* actForceDel = menu.addAction(QString::fromUtf8(u8"强制删除此条目"));
 
@@ -985,6 +1178,10 @@ void UninstallerWindow::onTableContextMenu(const QPoint& pos) {
     connect(actOpen, &QAction::triggered, this, [this, row]() {
         m_tableWidget->setCurrentCell(row, 0);
         openFileLocation();
+    });
+    connect(actLocate, &QAction::triggered, this, [this, row]() {
+        m_tableWidget->setCurrentCell(row, 0);
+        locateInRegistry();
     });
     connect(actCopy, &QAction::triggered, this, [this, row]() {
         m_tableWidget->setCurrentCell(row, 0);
@@ -1059,6 +1256,9 @@ void UninstallerWindow::scanResiduals() {
         if (Registry::deleteResidualFiles(residuals)) {
             QMessageBox::information(&dialog, getlang(0xD).toString(), getlang(0x19).toString());
             dialog.accept();
+            // ② 删除成功后重新扫描，让列表反映真实状态
+            built_list();
+            loadSoftwareList();
         }
         else {
             // ④ C 盘被锁定/无权限/文件占用时，给出可操作的友好提示，而非笼统报错。
@@ -1510,34 +1710,80 @@ void UninstallerWindow::toggleShowSystemComponents() {
 }
 
 void UninstallerWindow::exportSoftwareList() {
-    QString defaultName = "software_list.txt";
     QString fileName = QFileDialog::getSaveFileName(
         this,
         getlang(0x2E).toString(),
-        defaultName,
-        "Text Files (*.txt);;CSV Files (*.csv);;All Files (*)");
+        "software_list.csv",
+        QString::fromUtf8(u8"CSV 文件 (*.csv);;HTML 文件 (*.html);;文本文件 (*.txt);;所有文件 (*)"));
     if (fileName.isEmpty()) return;
 
+    // 收集当前可见行数据
+    struct Row { QString name, ver, pub, date, size, loc, status; };
+    QVector<Row> rows;
+    for (int i = 0; i < m_tableWidget->rowCount(); ++i) {
+        if (m_tableWidget->isRowHidden(i)) continue;
+        auto sw = softwareAtRow(i);
+        if (!sw) continue;
+        rows.append({ QString::fromStdString(sw->displayName),
+                      QString::fromStdString(sw->displayVersion),
+                      QString::fromStdString(sw->publisher),
+                      QString::fromStdString(sw->installDate),
+                      QString::fromStdString(sw->size.get()),
+                      QString::fromStdString(sw->installLocation),
+                      sw->isOrphaned ? QString::fromUtf8(u8"残留") : QString::fromUtf8(u8"正常") });
+    }
+
+    QString lower = fileName.toLower();
     QFile file(fileName);
     if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
         QMessageBox::warning(this, getlang(0x2Eu).toString(), QString::fromUtf8(u8"无法导出文件，请检查保存路径与写入权限。"));
         return;
     }
-
     QTextStream out(&file);
     out.setEncoding(QStringConverter::Utf8);
-    out << "Name\tVersion\tPublisher\tInstallDate\tSize\tLocation\tStatus\n";
-    for (int i = 0; i < m_tableWidget->rowCount(); ++i) {
-        if (m_tableWidget->isRowHidden(i)) continue;
-        auto sw = softwareAtRow(i);
-        if (!sw) continue;
-        out << QString::fromStdString(sw->displayName) << "\t"
-            << QString::fromStdString(sw->displayVersion) << "\t"
-            << QString::fromStdString(sw->publisher) << "\t"
-            << QString::fromStdString(sw->installDate) << "\t"
-            << QString::fromStdString(sw->size.get()) << "\t"
-            << QString::fromStdString(sw->installLocation) << "\t"
-            << (sw->isOrphaned ? QString::fromUtf8(u8"残留") : QString::fromUtf8(u8"正常")) << "\n";
+
+    if (lower.endsWith(".html")) {
+        out << "<!DOCTYPE html><html lang=\"zh-CN\"><head><meta charset=\"utf-8\">"
+               "<title>软件清单</title><style>"
+               "table{border-collapse:collapse;font-family:sans-serif;font-size:13px}"
+               "th,td{border:1px solid #ccc;padding:4px 8px;text-align:left}"
+               "th{background:#f0f0f0}tr:nth-child(even){background:#fafafa}</style></head><body>"
+               "<h2>已安装软件清单</h2><table><thead><tr>"
+               "<th>名称</th><th>版本</th><th>发行商</th><th>安装日期</th><th>大小</th><th>安装位置</th><th>状态</th>"
+               "</tr></thead><tbody>\n";
+        for (const auto& r : rows) {
+            auto esc = [](const QString& s) {
+                QString e = s;
+                e.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;");
+                return e.toHtmlEscaped();
+            };
+            out << "<tr><td>" << esc(r.name) << "</td><td>" << esc(r.ver) << "</td><td>"
+                << esc(r.pub) << "</td><td>" << esc(r.date) << "</td><td>" << esc(r.size)
+                << "</td><td>" << esc(r.loc) << "</td><td>" << esc(r.status) << "</td></tr>\n";
+        }
+        out << "</tbody></table></body></html>";
+    } else if (lower.endsWith(".csv")) {
+        // CSV：字段含逗号/引号/换行时按 RFC4180 用双引号包裹并转义内部引号。
+        auto csvCell = [](const QString& s) -> QString {
+            QString cell = s;
+            if (cell.contains(',') || cell.contains('"') || cell.contains('\n') || cell.contains('\r')) {
+                cell.replace('"', "\"\"");
+                return "\"" + cell + "\"";
+            }
+            return cell;
+        };
+        out << "Name,Version,Publisher,InstallDate,Size,Location,Status\n";
+        for (const auto& r : rows) {
+            out << csvCell(r.name) << "," << csvCell(r.ver) << "," << csvCell(r.pub) << ","
+                << csvCell(r.date) << "," << csvCell(r.size) << "," << csvCell(r.loc) << ","
+                << csvCell(r.status) << "\n";
+        }
+    } else {
+        out << "Name\tVersion\tPublisher\tInstallDate\tSize\tLocation\tStatus\n";
+        for (const auto& r : rows) {
+            out << r.name << "\t" << r.ver << "\t" << r.pub << "\t" << r.date << "\t"
+                << r.size << "\t" << r.loc << "\t" << r.status << "\n";
+        }
     }
     file.close();
     QMessageBox::information(this, getlang(0x31).toString(), getlang(0x32).toString().arg(fileName));
@@ -1577,6 +1823,77 @@ void UninstallerWindow::showDevInfo() {
 
     QMessageBox::information(this, getlang(0x35).toString(), info);
 }
+
+// 取中文串的拼音首字母（用于搜索：搜 "wx" 也能命中“微信”）。
+// 覆盖常见软件名用字；不在表中的汉字直接跳过，避免产生无意义字母。
+// 写成自由函数，供下方的 buildHaystack（同为自由函数）调用。
+static QString pinyinInitials(const QString& s) {
+    static const QHash<QChar, QChar> kMap = {
+        {QChar(0x5FAE), 'w'}, {QChar(0x4FE1), 'x'}, {QChar(0x817E), 't'}, {QChar(0x8BAF), 'x'},
+        {QChar(0x7F51), 'w'}, {QChar(0x6613), 'y'}, {QChar(0x963F), 'a'}, {QChar(0x91CC), 'l'},
+        {QChar(0x767E), 'b'}, {QChar(0x5EA6), 'd'}, {QChar(0x9489), 'd'}, {QChar(0x54D4), 'b'},
+        {QChar(0x5496), 'l'}, {QChar(0x7231), 'a'}, {QChar(0x5947), 'q'}, {QChar(0x9177), 'k'},
+        {QChar(0x72D7), 'g'}, {QChar(0x641C), 's'}, {QChar(0x5C71), 's'}, {QChar(0x91D1), 'j'},
+        {QChar(0x4F18), 'y'}, {QChar(0x6DD8), 't'}, {QChar(0x4EAC), 'j'}, {QChar(0x4E1C), 'd'},
+        {QChar(0x7F8E), 'm'}, {QChar(0x56E2), 't'}, {QChar(0x6296), 'd'}, {QChar(0x97F3), 'y'},
+        {QChar(0x5FEB), 'k'}, {QChar(0x624B), 's'}, {QChar(0x8F93), 's'}, {QChar(0x6B4C), 'g'},
+        {QChar(0x6E38), 'y'}, {QChar(0x620F), 'x'}, {QChar(0x89C6), 's'}, {QChar(0x9891), 'p'},
+        {QChar(0x79D1), 'k'}, {QChar(0x6280), 'j'}, {QChar(0x8F6F), 'r'}, {QChar(0x4EF6), 'j'},
+        {QChar(0x5DE5), 'g'}, {QChar(0x4F5C), 'z'}, {QChar(0x5BA4), 's'}, {QChar(0x5B89), 'a'},
+        {QChar(0x88C5), 'z'}, {QChar(0x7BA1), 'g'}, {QChar(0x7406), 'l'}, {QChar(0x89E3), 'j'},
+        {QChar(0x538B), 'y'}, {QChar(0x6D4F), 'l'}, {QChar(0x89C8), 'l'}, {QChar(0x5668), 'q'},
+        {QChar(0x5168), 'q'}, {QChar(0x6740), 's'}, {QChar(0x6BD2), 'd'}, {QChar(0x4E91), 'y'},
+        {QChar(0x76D8), 'p'}, {QChar(0x4E50), 'l'}, {QChar(0x56FE), 't'}, {QChar(0x7247), 'p'},
+        {QChar(0x6587), 'w'}, {QChar(0x6863), 'd'}, {QChar(0x793E), 's'}, {QChar(0x4EA4), 'j'},
+        {QChar(0x8D2D), 'g'}, {QChar(0x7269), 'w'}, {QChar(0x76F4), 'z'}, {QChar(0x64AD), 'b'},
+        {QChar(0x5F71), 'y'}, {QChar(0x7535), 'd'}, {QChar(0x5E94), 'y'}, {QChar(0x7528), 'y'},
+        {QChar(0x7F16), 'b'}, {QChar(0x8F91), 'j'}, {QChar(0x8BBE), 's'}, {QChar(0x8BA1), 'j'},
+        {QChar(0x7ED8), 'h'}, {QChar(0x753B), 'h'}, {QChar(0x526A), 'j'}, {QChar(0x5F55), 'l'},
+        {QChar(0x5C4F), 'p'}, {QChar(0x622A), 'j'}, {QChar(0x7F29), 's'}, {QChar(0x5305), 'b'},
+        {QChar(0x4E0B), 'x'}, {QChar(0x8F7D), 'z'}, {QChar(0x5177), 'j'}, {QChar(0x9A71), 'q'},
+        {QChar(0x52A8), 'd'}, {QChar(0x7A0B), 'c'}, {QChar(0x5E8F), 'x'}, {QChar(0x7CFB), 'x'},
+        {QChar(0x7EDF), 't'}, {QChar(0x64CD), 'c'}, {QChar(0x66F4), 'g'}, {QChar(0x65B0), 'x'},
+        {QChar(0x5Fae), 'w'}, {QChar(0x4fe1), 'x'}, {QChar(0x817e), 't'}, {QChar(0x8baf), 'x'},
+        {QChar(0x8ba1), 'j'}, {QChar(0x7ed8), 'h'},
+    };
+    QString out;
+    for (QChar ch : s) {
+        if (kMap.contains(ch)) out.append(kMap[ch]);
+    }
+    return out;
+}
+
+// 判断是否为“系统关键项”（Windows 更新 / 驱动 / 系统组件等），
+// 这类项一旦误卸载会导致系统不稳定，故在卸载/删残留前拦截并提示。
+bool UninstallerWindow::isCriticalSystemItem(const SoftwareInfo* sw) const {
+    if (!sw) return false;
+    // 注册表已标记的 SystemComponent 直接视为系统组件
+    if (sw->isSystemComponent) return true;
+    QString name = QString::fromStdString(sw->displayName).toLower();
+    QString pub = QString::fromStdString(sw->publisher).toLower();
+    // 发行商黑名单：微软 / 系统级厂商
+    if (pub.contains("microsoft") || pub.contains("windows") ||
+        pub.contains("intel") || pub.contains("advanced micro devices") ||
+        pub.contains("realtek") || pub.contains("qualcomm") ||
+        pub.contains("oem") || pub.contains("canonical") ||
+        pub.contains("apple inc")) {
+        // 仅对“明显是驱动/更新/运行时”的条目拦截，避免误伤微软正常应用
+        if (name.contains("driver") || name.contains("更新") || name.contains("update") ||
+            name.contains("hotfix") || name.contains("redistributable") ||
+            name.contains("visual c++") || name.contains("runtime") ||
+            name.contains("driver") || name.contains("kb") ||
+            name.contains("windows") || name.contains("component") ||
+            name.contains("service pack") || name.contains("security")) {
+            return true;
+        }
+    }
+    // 名称特征：KB 补丁号、Windows 组件、驱动
+    if (name.contains("kb") && name.contains("update")) return true;
+    if (name.contains("windows driver") || name.contains("设备驱动")) return true;
+    if (name.contains("microsoft visual c++") || name.contains("microsoft .net")) return true;
+    return false;
+}
+
 
 // 把搜索文本统一小写，并把希腊字母 μ 替换成拉丁字母 u，
 // 这样用户输入 "uvision" 也能匹配注册表里的 "μVision"。
@@ -1714,6 +2031,10 @@ static QString buildHaystack(const SoftwareInfo* sw) {
                 if (!parts.contains(syn)) parts.append(syn);
             }
         }
+        // ⑤ 拼音首字母：把中文软件名的首字母（如“微信”→wx）也并入 haystack，
+        // 这样搜 "wx" 能命中“微信”、搜 "tx" 能命中“腾讯”。
+        QString py = pinyinInitials(n).toLower();
+        if (!py.isEmpty() && !parts.contains(py)) parts.append(py);
     }
     return compactForSearch(parts.join(QChar(' ')));
 }
@@ -1753,8 +2074,11 @@ void UninstallerWindow::filterSoftware() {
                 // 只要 haystack 命中其中任意一个即视为匹配，实现中英文互搜。
                 bool km = false;
                 for (const QString& syn : synonymSet(tk)) {
-                    if (hay.contains(compactForSearch(syn))) { km = true; break; }
+                    QString cs = compactForSearch(syn);
+                    if (hay.contains(cs)) { km = true; break; }
                 }
+                // ⑤ 前缀匹配：搜 "wech" 也能命中 "wechat for windows"（hay 以 token 开头）。
+                if (!km && hay.startsWith(tk)) { km = true; }
                 if (!km) { nameOk = false; break; }
             }
             // “仅显示残留项”过滤：开启时只保留 isOrphaned 的条目
@@ -1989,6 +2313,18 @@ void UninstallerWindow::setupUI() {
     m_devMenu->addAction(getlang(0x2F).toString(), this, &UninstallerWindow::copyUninstallCommand);
     m_devMenu->addAction(getlang(0x30).toString(), this, &UninstallerWindow::showDevInfo);
 
+    // ⑨ 视图/主题菜单
+    m_viewMenu = bar->addMenu(QString::fromUtf8(u8"视图"));
+    QAction* lightAct = m_viewMenu->addAction(QString::fromUtf8(u8"亮色主题"));
+    QAction* darkAct = m_viewMenu->addAction(QString::fromUtf8(u8"暗色主题"));
+    lightAct->setCheckable(true);
+    darkAct->setCheckable(true);
+    connect(lightAct, &QAction::triggered, this, [this]() { setTheme(0); });
+    connect(darkAct, &QAction::triggered, this, [this]() { setTheme(1); });
+    // 启动时根据持久化的主题勾选
+    lightAct->setChecked(m_theme == 0);
+    darkAct->setChecked(m_theme == 1);
+
     // 工具栏
     QHBoxLayout* toolBar = new QHBoxLayout();
 
@@ -2042,6 +2378,7 @@ void UninstallerWindow::setupUI() {
     QStringList headers = { getlang(0x25).toString(), getlang(0x26).toString(), getlang(0x27).toString(), getlang(0x28).toString(), getlang(0x29).toString(), getlang(0x2A).toString(), getlang(0x42).toString() };
     m_tableWidget->setHorizontalHeaderLabels(headers);
     m_tableWidget->setSelectionBehavior(QAbstractItemView::SelectRows);
+    m_tableWidget->setSelectionMode(QAbstractItemView::ExtendedSelection); // ③ 支持 Ctrl/Shift 多选
     m_tableWidget->setEditTriggers(QAbstractItemView::NoEditTriggers);
     m_tableWidget->setAlternatingRowColors(true);
     m_tableWidget->setShowGrid(true);
@@ -2061,6 +2398,13 @@ void UninstallerWindow::setupUI() {
     // 按钮栏
     QHBoxLayout* buttonBar = new QHBoxLayout();
 
+    m_batchUninstallBtn = new QPushButton(QString::fromUtf8(u8"批量卸载"), this);
+    m_batchUninstallBtn->setObjectName("batchUninstallBtn");
+    connect(m_batchUninstallBtn, &QPushButton::clicked, this, &UninstallerWindow::batchUninstall);
+    m_batchDelBtn = new QPushButton(QString::fromUtf8(u8"批量删残留"), this);
+    m_batchDelBtn->setObjectName("batchDelBtn");
+    connect(m_batchDelBtn, &QPushButton::clicked, this, &UninstallerWindow::batchDeleteResiduals);
+
     m_uninstallBtn = new QPushButton(getlang(0x1f).toString(), this);
     m_uninstallBtn->setObjectName("uninstallBtn");
     connect(m_uninstallBtn, &QPushButton::clicked, this, &UninstallerWindow::uninstallSelected);
@@ -2073,6 +2417,8 @@ void UninstallerWindow::setupUI() {
     m_detailsBtn->setObjectName("detailsBtn");
     connect(m_detailsBtn, &QPushButton::clicked, this, &UninstallerWindow::showDetails);
 
+    buttonBar->addWidget(m_batchUninstallBtn);
+    buttonBar->addWidget(m_batchDelBtn);
     buttonBar->addWidget(m_uninstallBtn);
     buttonBar->addWidget(m_scanBtn);
     buttonBar->addWidget(m_detailsBtn);
