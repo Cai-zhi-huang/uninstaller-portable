@@ -36,6 +36,8 @@
 #include <QJsonArray>
 #include <QDateTime>
 #include <QCoreApplication>
+#include <QtConcurrent>
+#include <QFutureWatcher>
 #include "systools.hpp"
 
 // 大小列专用表格项：按字节数（UserRole）排序，而不是按 "3.43 GB" / "344.02 MB" 文本排序。
@@ -439,7 +441,9 @@ static QList<QString> collectInstallExes(const QString& installLoc,
 // 因此可在后台线程执行。未找到任何图标时返回空 QImage（调用方据此回退到默认图标）。
 // allowProcessScan=false 时跳过“通过运行进程窗口找 exe”这一步：EnumWindows 在后台线程
 // 调用存在跨线程 SendMessage 死锁风险，故后台加载时不走该分支；GUI 线程的完整版会启用。
-static QImage softwareIconImage(const SoftwareInfo* sw, bool allowProcessScan) {
+// fastMode=true 时只尝试 DisplayIcon 与 UninstallString 指向的单个文件，不扫描安装目录、
+// 不枚举进程、不扫 ProgramData，用于主线程填充初始列表，避免进度条卡死。
+static QImage softwareIconImage(const SoftwareInfo* sw, bool allowProcessScan, bool fastMode = false) {
     if (!sw) return QImage();
 
     QString displayName = QString::fromStdString(sw->displayName);
@@ -460,12 +464,14 @@ static QImage softwareIconImage(const SoftwareInfo* sw, bool allowProcessScan) {
         if (!img.isNull()) return img;
     }
 
-    // 2) 安装目录里找 exe（DFS ≤2 层，已对锁定/只读卷跳过）
-    QString installLoc = stripQuotes(QString::fromStdString(sw->installLocation)).trimmed();
-    for (const QString& exePath : collectInstallExes(installLoc, displayName,
-                                                     QString::fromStdString(sw->publisher).trimmed())) {
-        QImage img = extractIconImage(exePath, 0);
-        if (!img.isNull()) return img;
+    // 2) 安装目录里找 exe（DFS ≤2 层，fastMode 跳过以避免扫描大量文件）
+    if (!fastMode) {
+        QString installLoc = stripQuotes(QString::fromStdString(sw->installLocation)).trimmed();
+        for (const QString& exePath : collectInstallExes(installLoc, displayName,
+                                                         QString::fromStdString(sw->publisher).trimmed())) {
+            QImage img = extractIconImage(exePath, 0);
+            if (!img.isNull()) return img;
+        }
     }
 
     // 3) 卸载命令里解析出的 exe
@@ -476,8 +482,8 @@ static QImage softwareIconImage(const SoftwareInfo* sw, bool allowProcessScan) {
         if (!img.isNull()) return img;
     }
 
-    // 4) 运行中的进程 exe（仅 GUI 线程启用，避免后台线程 EnumWindows 死锁）
-    if (allowProcessScan) {
+    // 4) 运行中的进程 exe（fastMode 与后台线程均跳过，避免 EnumWindows 死锁/卡顿）
+    if (!fastMode && allowProcessScan) {
         QStringList nameKeys;
         nameKeys << displayName;
         if (displayName.contains("微信", Qt::CaseInsensitive) ||
@@ -492,8 +498,8 @@ static QImage softwareIconImage(const SoftwareInfo* sw, bool allowProcessScan) {
         }
     }
 
-    // 5) C:\ProgramData\Publisher\Product 下的辅助程序（主程序目录已被清空的情况）
-    {
+    // 5) C:\ProgramData\Publisher\Product 下的辅助程序（fastMode 跳过）
+    if (!fastMode) {
         QString publisher = QString::fromStdString(sw->publisher).trimmed();
         if (!publisher.isEmpty() && !displayName.isEmpty()) {
             QString pubBase = publisher;
@@ -537,6 +543,14 @@ static QImage softwareIconImage(const SoftwareInfo* sw, bool allowProcessScan) {
     }
 
     return QImage();
+}
+
+// 快速版：只在主线程填充初始列表时使用，避免扫描目录/枚举进程导致进度条或界面卡死。
+static QIcon iconForSoftwareFast(const SoftwareInfo* sw) {
+    if (!sw) return defaultAppIcon();
+    QImage img = softwareIconImage(sw, /*allowProcessScan=*/false, /*fastMode=*/true);
+    if (!img.isNull()) return QIcon(QPixmap::fromImage(img));
+    return defaultAppIcon(QString::fromStdString(sw->displayName));
 }
 
 static QIcon iconForSoftware(const SoftwareInfo* sw) {
@@ -791,6 +805,10 @@ void UninstallerWindow::built_list(bool allowCache) {
     m_softwareList = Registry::getAllInstalledSoftware();
     len = m_softwareList.size();
     total_size = 0;
+    if (len == 0) {
+        saveSoftwareCache();
+        return;
+    }
     QProgressDialog progress(
         getlang(0x2u).toString(),
         getlang(0x3u).toString(),
@@ -799,30 +817,24 @@ void UninstallerWindow::built_list(bool allowCache) {
         this);
     progress.setWindowModality(Qt::WindowModal);
     progress.setMinimumDuration(1000);
-    for (int i = 0; i < len; i++) {
-        if (progress.wasCanceled()) {
-            m_softwareList.clear();
-            len = 0;
-            break;
-        }
-        auto sw = &m_softwareList[i];
-        sw->registryInit();
-        total_size += sw->size.size;
-        // ⑩ 进度细化：显示当前正在扫描的盘符，避免“黑盒”卡顿不知卡在哪。
-        QString drive;
-        QString il = QString::fromStdString(sw->installLocation);
-        if (il.size() >= 2 && il[1] == QChar(':')) drive = il.left(2).toUpper();
-        QString label = getlang(0x5u).toString()
-            .arg(QString::fromStdString(sw->displayName))
-            .arg(i)
-            .arg(len)
-            .arg(QString::fromStdString(total_size.get()));
-        if (!drive.isEmpty()) label += QString::fromUtf8(u8"  [扫描 %1]").arg(drive);
-        progress.setLabelText(label);
-        progress.setValue(i);
-        // 每次处理完一个软件都泵一次事件，确保进度条/标题栏不会长时间显示“未响应”。
-        QApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
-    }
+
+    // 并行初始化（注册表读取 + 体积扫描 + 进程检测），多核加速。
+    // registryInit 仅调用文件/进程/注册表等系统 API，不触碰任何 GUI/窗口子系统，
+    // 因此在后台线程并发执行是安全的。期间用 QEventLoop 泵事件保持 UI 响应，
+    // 进度条随 QtConcurrent 报告实时推进（替代原先逐元素串行 + 手动泵事件）。
+    QFutureWatcher<void> watcher;
+    QEventLoop loop;
+    connect(&watcher, &QFutureWatcher<void>::finished, &loop, &QEventLoop::quit);
+    connect(&watcher, &QFutureWatcher<void>::progressValueChanged,
+            &progress, [&](int v) {
+                progress.setValue(v);
+                QApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
+            });
+    watcher.setFuture(QtConcurrent::map(m_softwareList,
+        [](SoftwareInfo& sw) { sw.registryInit(); }));
+    loop.exec();
+
+    for (auto& sw : m_softwareList) total_size += sw.size.size;
     progress.close();
 
     // 实时扫描完成后写缓存（供1小时内再次启动时免加载条）
@@ -911,7 +923,27 @@ void UninstallerWindow::saveSoftwareCache() {
 void UninstallerWindow::closeEvent(QCloseEvent* event) {
     // 关闭前台窗口即结束整个程序（含后台），不缩到系统托盘
     event->accept();
-    QCoreApplication::quit();
+
+    // 先立即隐藏窗口：即使后台线程还没清理完，用户也看不到“未响应”状态。
+    hide();
+    QApplication::processEvents();
+
+    // 请求后台图标线程退出；若线程卡在 ExtractIconExW/网络盘/C盘锁上，
+    // 仅调用 QCoreApplication::quit() Qt 会等待线程结束，导致进程残留。
+    if (m_iconThread && m_iconThread->isRunning()) {
+        m_iconThread->requestInterruption();
+        m_iconThread->quit();
+        if (!m_iconThread->wait(1000)) {
+            // 强制终止（图标提取函数本身阻塞时只能如此）
+            m_iconThread->terminate();
+            m_iconThread->wait(200);
+        }
+        m_iconThread = nullptr;
+    }
+
+    // 立即结束整个进程：即使后台线程/WinAPI 仍阻塞，也不给任何残留机会。
+    // 当前程序关闭时无需写回数据（缓存已实时写入），直接 ExitProcess 是安全的。
+    ::ExitProcess(0);
 }
 
 
@@ -943,6 +975,7 @@ public:
 public slots:
     void run() {
         for (const auto& kv : std::as_const(items)) {
+            if (QThread::currentThread()->isInterruptionRequested()) break;
             SoftwareInfo* sw = kv.second;
             if (!sw) continue;
             // 后台不启用“运行进程扫描”（EnumWindows 在后台线程有跨线程死锁风险），
@@ -972,15 +1005,31 @@ void UninstallerWindow::startBackgroundIconLoad() {
     }
     if (items.isEmpty()) return;
 
+    // 若已有后台图标线程在跑，先请求中断并等待退出，避免旧线程与新线程并发访问图标句柄/GDI。
+    if (m_iconThread) {
+        if (m_iconThread->isRunning()) {
+            m_iconThread->requestInterruption();
+            m_iconThread->quit();
+            m_iconThread->wait(1000);
+        }
+        m_iconThread->deleteLater();
+        m_iconThread = nullptr;
+    }
+
     auto* worker = new IconLoaderWorker;
     worker->items = items;
     auto* thread = new QThread(this);
+    m_iconThread = thread;
     worker->moveToThread(thread);
     connect(thread, &QThread::started, worker, &IconLoaderWorker::run);
     connect(worker, &IconLoaderWorker::iconReady,
             this, &UninstallerWindow::onIconReady, Qt::QueuedConnection);
     connect(worker, &IconLoaderWorker::finished, thread, &QThread::quit);
     connect(thread, &QThread::finished, worker, &QObject::deleteLater);
+    connect(thread, &QThread::finished, thread, [this]() {
+        // thread 自己 deleteLater 后把成员指针清空（不 double-delete）
+        if (m_iconThread && m_iconThread->isFinished()) m_iconThread = nullptr;
+    });
     connect(thread, &QThread::finished, thread, &QObject::deleteLater);
     thread->start();
 }
@@ -1027,9 +1076,9 @@ void UninstallerWindow::loadSoftwareList() {
         for (const auto sw : j.second) {
             auto* nameItem = new QTableWidgetItem(QString::fromStdString(sw->displayName));
             nameItem->setData(Qt::UserRole, QVariant::fromValue(reinterpret_cast<qintptr>(sw)));
-            // 进度条期间只放默认图标（不访问任何文件），真实图标由后台线程懒加载，
-            // 这样即使 C 盘被锁定/网络盘慢/目录巨大，进度条也不会卡死（见 startBackgroundIconLoad）。
-            nameItem->setIcon(defaultAppIcon(QString::fromStdString(sw->displayName)));
+            // 列表填充时使用“快速图标”：只从 DisplayIcon / UninstallString 指向的单个文件提取，
+            // 不扫描安装目录/不枚举进程。这样进度条不会卡死，同时能恢复大部分真实图标。
+            nameItem->setIcon(iconForSoftwareFast(sw));
             m_tableWidget->setItem(i, 0, nameItem);
 
             m_tableWidget->setItem(i, 1, new QTableWidgetItem(QString::fromStdString(sw->displayVersion)));
@@ -1084,10 +1133,10 @@ void UninstallerWindow::loadSoftwareList() {
     m_tableWidget->sortItems(0, Qt::AscendingOrder);
     progress.close();
 
-    // 进度条期间只放了默认图标；这里在后台线程逐个提取真实图标，提取完通过信号
-    // 回到 UI 线程 setIcon。这样即便 C 盘被锁定 / 网络盘慢 / 安装目录巨大，
-    // 主界面早已显示出来，不会因进度条卡死而无响应。
-    startBackgroundIconLoad();
+    // 后台图标懒加载已禁用：ExtractIconExW/DrawIconEx/GDI 在后台线程与 Qt 主线程
+    // 共享 GUI 子系统，可能触发竞争导致主窗口“未响应”。先临时禁用，后续改为
+    // 仅提取可见区域图标（主线程按需执行）再恢复。
+    // startBackgroundIconLoad();
 
     // 状态栏统一由 filterSoftware 更新为可见行数/可见大小；
     // 若搜索框为空则显示全部，非空则保持过滤状态。
@@ -1677,16 +1726,14 @@ void UninstallerWindow::showUpdatePopup() {
     QTextEdit* te = new QTextEdit(&dlg);
     te->setReadOnly(true);
     te->setPlainText(QString::fromUtf8(
-        u8"• ① 残留文件送回收站（可撤销），失败才硬删\n"
-        u8"• ② 卸载/删残留后自动重扫并刷新列表\n"
-        u8"• ③ 表格多选 + 批量卸载 / 批量删残留\n"
-        u8"• ④ 卸载前预览弹窗（含释放空间估算）\n"
-        u8"• ⑤ 搜索增强：前缀匹配 + 拼音首字母（微信→wx）\n"
-        u8"• ⑥ 清单导出 CSV / HTML / TXT 三种格式\n"
-        u8"• ⑦ 系统关键项灰显并拦截误卸载\n"
-        u8"• ⑧ 右键「在注册表中定位」一键跳 regedit\n"
-        u8"• ⑨ 亮/暗主题切换并持久化\n"
-        u8"• ⑩ 扫描进度显示当前盘符 [扫描 D:]"
+        u8"• ① 新增「运行中」分组：真实检测软件进程状态\n"
+        u8"• ② 列表与体积扫描改为多核并行（QtConcurrent），扫描更快不卡顿\n"
+        u8"• ③ 修复单字母搜索在排序模式下失效的问题\n"
+        u8"• ④ 修复中文软件（如微信）被误判为残留\n"
+        u8"• ⑤ 修复带空格路径「打开文件位置」打不开\n"
+        u8"• ⑥ 安装位置自动校正（如 WeChat→Weixin 等过时路径）\n"
+        u8"• ⑦ 系统组件默认隐藏，可在视图菜单切换显示\n"
+        u8"• ⑧ 关闭窗口彻底退出，不再残留进程"
     ));
     te->setFixedHeight(230);
     layout->addWidget(te);
@@ -1892,18 +1939,20 @@ void UninstallerWindow::openFileLocation() {
     }
 
     // 调用资源管理器：文件用 /select 高亮，文件夹直接打开。
-    // 注意：不要把路径手动加引号再用 QStringList 传参——Qt 的 QProcess 在 Windows 上
-    // 会对含引号的参数做二次转义，导致 explorer 收到的参数被多转义、选中失败。
-    // 正确做法：让 Qt 根据路径是否含空格自行决定是否加引号（即只传 /select,<path>）。
+    // 改用 ShellExecuteW 直接构造命令参数字符串，避免 QProcess::startDetached 在 Windows
+    // 上对 /select,<path> 中含空格路径的参数加引号方式与 explorer 解析不兼容，
+    // 导致资源管理器打开默认“文档”夹而非目标位置。
     QString native = QDir::toNativeSeparators(target);
-    QStringList args;
+    QString params;
     if (selectFile) {
-        args << (QString("/select,") + native);
+        params = QString("/select,\"%1\"").arg(native);
     } else {
-        args << native;
+        params = QString("/e,\"%1\"").arg(native);
     }
-    bool ok = QProcess::startDetached("explorer.exe", args);
-    if (!ok) {
+    auto ret = reinterpret_cast<intptr_t>(::ShellExecuteW(
+        nullptr, L"open", L"explorer.exe",
+        params.toStdWString().c_str(), nullptr, SW_SHOWNORMAL));
+    if (ret <= 32) {
         QMessageBox::warning(this, getlang(0xFu).toString(), getlang(0x3B).toString());
     }
 }
@@ -2540,9 +2589,13 @@ void UninstallerWindow::setupUI() {
 
     // 工具栏
     QHBoxLayout* toolBar = new QHBoxLayout();
+    toolBar->setSpacing(8);
+    toolBar->setContentsMargins(0, 4, 0, 4);
 
     m_searchEdit = new QLineEdit(this);
     m_searchEdit->setPlaceholderText(getlang(0x22).toString());
+    m_searchEdit->setMinimumWidth(220);
+    m_searchEdit->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
     connect(m_searchEdit, &QLineEdit::textChanged, this, &UninstallerWindow::filterSoftware);
 
     // Ctrl+F 快速聚焦搜索框
@@ -2561,8 +2614,8 @@ void UninstallerWindow::setupUI() {
 
     m_scanLabel = new QLabel(getlang(0x24).toString());
     toolBar->addWidget(m_scanLabel);
-    toolBar->addWidget(m_searchEdit);
-    toolBar->addStretch();
+    // 搜索框随窗口宽度自动伸缩，占满中间空白
+    toolBar->addWidget(m_searchEdit, /*stretch=*/1);
     toolBar->addWidget(m_refreshBtn);
 
     // 仅显示残留项过滤
@@ -2574,7 +2627,6 @@ void UninstallerWindow::setupUI() {
     toolBar->addWidget(m_orphanOnlyCheck);
 
     // 语言下拉框：放在工具栏最右，比菜单栏更显眼，点击即时切换。
-    toolBar->addStretch();
     m_langCombo = new QComboBox(this);
     for (int i = 0; i < langCount(); ++i) m_langCombo->addItem(langName(i, G.LANGUAGE));
     m_langCombo->setCurrentIndex(G.LANGUAGE);

@@ -25,7 +25,7 @@ set(CMAKE_AUTORCC ON)
 # 设置 Qt 路径
 set(CMAKE_PREFIX_PATH "D:/CZH720/tools/Qt/6.10.3/llvm-mingw_64")
 
-find_package(Qt6 REQUIRED COMPONENTS Core Widgets Gui)
+find_package(Qt6 REQUIRED COMPONENTS Core Widgets Gui Concurrent)
 
 # 添加子目录
 add_subdirectory(api)

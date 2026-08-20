@@ -1,7 +1,7 @@
 # 设置 Qt 路径
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 set(CMAKE_PREFIX_PATH "D:/CZH720/tools/Qt/6.10.3/llvm-mingw_64")
-find_package(Qt6 REQUIRED COMPONENTS Core Widgets Gui)
+find_package(Qt6 REQUIRED COMPONENTS Core Widgets Gui Concurrent)
 
 # 1. 收集 api 目录下所有子目录的源文件
 file(GLOB_RECURSE API_SOURCES
@@ -28,8 +28,9 @@ target_include_directories(api
 )
 
 # 4. 链接 Qt6::Widgets 库 (新增这一行)
-target_link_libraries(api PUBLIC 
+target_link_libraries(api PUBLIC
         Qt6::Core
         Qt6::Widgets
         Qt6::Gui
+        Qt6::Concurrent
 )

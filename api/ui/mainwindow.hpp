@@ -101,6 +101,7 @@ private:
     filesize_t total_size;
     QLineEdit* m_searchEdit{ nullptr };
     QTableWidget* m_tableWidget{ nullptr };
+    QThread* m_iconThread{ nullptr };       // 后台图标加载线程（关闭窗口时需强制退出，防进程残留）
     vector<int> findlist{ 0, 1 };
     vector<SoftwareInfo> m_softwareList;
     map<int, vector<SoftwareInfo*>> m_swlist;

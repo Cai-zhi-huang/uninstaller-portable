@@ -9,6 +9,7 @@
 #include <fstream>
 #include <tlhelp32.h>
 #include <shellapi.h>
+#include <unordered_set>
 
 // 前向声明：normalizeCommandLineForArgv 会调用它，而它定义在下方。
 static bool splitExeAndParams(const std::wstring& cmd, std::wstring& exePath, std::wstring& params);
@@ -96,17 +97,31 @@ static bool splitExeAndParams(const std::wstring& cmd, std::wstring& exePath, st
     return !exePath.empty();
 }
 
+static std::string lastRegistryKeyName(const std::string& regPath) {
+    size_t pos = regPath.rfind('\\');
+    return (pos == std::string::npos) ? regPath : regPath.substr(pos + 1);
+}
+
 std::vector<SoftwareInfo> Registry::getAllInstalledSoftware() {
     std::vector<SoftwareInfo> softwareList;
+    std::unordered_set<std::string> seenKeys;
     // 使用 place.hpp 中定义的路径
     for (const auto& [hive, path] : registryPaths) {
-        enumRegistrySoftware(hive, path, softwareList);
+        std::vector<SoftwareInfo> batch;
+        enumRegistrySoftware(hive, path, batch);
+        for (auto& sw : batch) {
+            // 去重：64 位视图与 WOW6432Node 经常出现同名的 Windows 系统组件
+            //（如 AddressBook、IE40、Fontcore），按注册表项名仅保留第一次出现的条目。
+            const std::string keyName = lastRegistryKeyName(sw.regPath);
+            if (!seenKeys.insert(keyName).second) continue;
+            softwareList.push_back(std::move(sw));
+        }
     }
-    
+
     // 排序并过滤空名称
     softwareList.erase(
-        std::remove_if(softwareList.begin(), softwareList.end(), 
-            [](const SoftwareInfo& s) { return s.displayName.empty(); }), 
+        std::remove_if(softwareList.begin(), softwareList.end(),
+            [](const SoftwareInfo& s) { return s.displayName.empty(); }),
         softwareList.end()
     );
 
@@ -560,6 +575,25 @@ static std::string mainExeFromDisplayIcon(const std::string& displayIcon) {
     return s.substr(0, dot + 4);
 }
 
+// 检查目录（仅直接子项，不递归）是否含有 uninstall.exe / uninst.exe 等卸载入口。
+static bool dirContainsUninstaller(const std::wstring& dir) {
+    std::error_code ec;
+    if (dir.empty() || !fs::exists(dir, ec)) return false;
+    for (auto it = fs::directory_iterator(dir, ec); it != fs::directory_iterator(); it.increment(ec)) {
+        if (ec) break;
+        std::error_code ec2;
+        if (it->is_regular_file(ec2)) {
+            std::wstring name = it->path().filename().wstring();
+            std::transform(name.begin(), name.end(), name.begin(), ::towlower);
+            if (name.find(L"uninstall") != std::wstring::npos ||
+                name.find(L"uninst") != std::wstring::npos) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 // 检查目录（仅直接子项，不递归）是否含有任意 .exe 文件。
 // 用于残留判定的“软件仍在使用”兜底护栏：当 DisplayIcon 指向的主程序文件缺失，
 // 但安装目录里还存在别的 exe（说明软件可能还在用、只是图标文件被删/重装挪走），
@@ -577,6 +611,302 @@ static bool dirContainsExe(const std::wstring& dir) {
         }
     }
     return false;
+}
+
+// 基于 displayName 与 publisher 生成一组可能的目录名关键字（小写）。
+// 用于安装目录迁移后在父目录里做近似匹配。
+static std::vector<std::string> collectDirNameKeys(const std::string& displayName,
+                                                   const std::string& publisher) {
+    std::vector<std::string> keys;
+    auto add = [&keys](const std::string& raw) {
+        if (raw.size() < 2) return;
+        std::string k = raw;
+        std::transform(k.begin(), k.end(), k.begin(), ::tolower);
+        // 去掉常见括号版本号
+        size_t paren = k.find('(');
+        if (paren != std::string::npos) k = k.substr(0, paren);
+        while (!k.empty() && (k.back() == ' ' || k.back() == '\t')) k.pop_back();
+        if (k.size() < 2) return;
+        if (std::find(keys.begin(), keys.end(), k) == keys.end())
+            keys.push_back(k);
+    };
+
+    add(displayName);
+    // 中文名软件补充英文名
+    std::string lower = displayName;
+    std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
+    if (lower.find("微信") != std::string::npos) { add("wechat"); add("weixin"); }
+    if (lower.find("钉钉") != std::string::npos) { add("dingtalk"); add("ding"); }
+    if (lower.find("腾讯") != std::string::npos) { add("tencent"); }
+    if (lower.find("qq") != std::string::npos) { add("qq"); }
+    if (lower.find("网盘") != std::string::npos) { add("baidunetdisk"); add("cloud"); }
+    if (lower.find("wps") != std::string::npos) { add("wps"); }
+    if (lower.find("vscode") != std::string::npos || lower.find("visual studio code") != std::string::npos) { add("code"); add("vscode"); }
+
+    // publisher
+    add(publisher);
+    return keys;
+}
+
+// 在指定父目录下搜索与软件名称最匹配的子目录。
+// 匹配规则：子目录名包含任一关键字，或任一关键字包含子目录名。
+// 优先选择包含 .exe 或 uninstall.exe 的目录。
+static std::string findSimilarDirectory(const std::string& parentDir,
+                                         const SoftwareInfo& sw) {
+    std::error_code ec;
+    std::wstring wParent = utf8ToWide(parentDir);
+    if (!fs::exists(wParent, ec) || !fs::is_directory(wParent, ec)) return "";
+
+    std::vector<std::string> keys = collectDirNameKeys(sw.displayName, sw.publisher);
+    if (keys.empty()) return "";
+
+    std::string best;
+    int bestScore = 0;
+
+    for (auto it = fs::directory_iterator(wParent, ec); it != fs::directory_iterator(); it.increment(ec)) {
+        if (ec) break;
+        std::error_code ec2;
+        if (!it->is_directory(ec2)) continue;
+        std::wstring dirNameW = it->path().filename().wstring();
+        std::string dirName = wideToUtf8(dirNameW);
+        std::string lowerDir = dirName;
+        std::transform(lowerDir.begin(), lowerDir.end(), lowerDir.begin(), ::tolower);
+
+        int score = 0;
+        for (const std::string& key : keys) {
+            if (lowerDir == key) score = std::max(score, 100);
+            else if (lowerDir.find(key) != std::string::npos) score = std::max(score, 50);
+            else if (key.find(lowerDir) != std::string::npos && lowerDir.size() >= 3) score = std::max(score, 30);
+        }
+        if (score == 0) continue;
+
+        std::wstring wDir = it->path().wstring();
+        if (dirContainsExe(wDir)) score += 10;
+        if (dirContainsUninstaller(wDir)) score += 15;
+
+        if (score > bestScore) {
+            bestScore = score;
+            best = wideToUtf8(wDir);
+        }
+    }
+    return best;
+}
+
+// 从 DisplayIcon / UninstallString 提取主程序 exe 文件名（不含路径和扩展名）。
+static std::string extractPrimaryExeName(const SoftwareInfo& sw) {
+    // 优先 DisplayIcon
+    std::string iconExe = mainExeFromDisplayIcon(sw.displayIcon);
+    if (!iconExe.empty()) {
+        size_t p = iconExe.find_last_of("\\/");
+        std::string name = (p == std::string::npos) ? iconExe : iconExe.substr(p + 1);
+        size_t d = name.rfind('.');
+        if (d != std::string::npos) name = name.substr(0, d);
+        if (name.size() >= 2) return name;
+    }
+    // 次选卸载程序所在目录名
+    std::string ud = extractDirFromUninstallString(sw.uninstallString);
+    if (!ud.empty()) {
+        size_t p = ud.find_last_of("\\/");
+        std::string name = (p == std::string::npos) ? ud : ud.substr(p + 1);
+        if (name.size() >= 2) return name;
+    }
+    // 从 displayName 取英文名/映射
+    std::vector<std::string> keys = collectDirNameKeys(sw.displayName, sw.publisher);
+    for (const std::string& k : keys) {
+        if (k.find_first_of("abcdefghijklmnopqrstuvwxyz") != std::string::npos) return k;
+    }
+    return "";
+}
+
+// 在磁盘常见位置有限搜索主程序 exe，返回其所在目录。
+// 搜索范围：installLocation 所在盘符的 Program Files / Program Files (x86) /
+// Users\<当前用户>\AppData\Local / Roaming，以及 installLocation 的父目录。
+// 限制最大深度 3，避免全盘递归导致卡顿。
+static std::string findExeOnDisk(const SoftwareInfo& sw) {
+    std::string exeName = extractPrimaryExeName(sw);
+    if (exeName.empty()) return "";
+
+    // 确定搜索盘符
+    std::string drive = "C:";
+    if (!sw.installLocation.empty() && sw.installLocation.size() >= 2 && sw.installLocation[1] == ':') {
+        drive = sw.installLocation.substr(0, 2);
+    } else if (!sw.displayIcon.empty() && sw.displayIcon.size() >= 2 && sw.displayIcon[1] == ':') {
+        drive = sw.displayIcon.substr(0, 2);
+    } else if (!sw.uninstallString.empty() && sw.uninstallString.size() >= 2 && sw.uninstallString[1] == ':') {
+        drive = sw.uninstallString.substr(0, 2);
+    }
+
+    std::vector<std::wstring> roots;
+    std::wstring wDrive = utf8ToWide(drive);
+    roots.push_back(wDrive + L"\\");
+    roots.push_back(wDrive + L"\\Program Files");
+    roots.push_back(wDrive + L"\\Program Files (x86)");
+
+    // 当前用户 AppData
+    char username[256] = {0};
+    DWORD len = 256;
+    if (GetUserNameA(username, &len)) {
+        roots.push_back(wDrive + std::wstring(L"\\Users\\") + utf8ToWide(std::string(username)) + L"\\AppData\\Local");
+        roots.push_back(wDrive + std::wstring(L"\\Users\\") + utf8ToWide(std::string(username)) + L"\\AppData\\Roaming");
+    }
+
+    // installLocation 的父目录
+    if (!sw.installLocation.empty()) {
+        std::string parent = dirOfExe(sw.installLocation);
+        if (!parent.empty()) roots.push_back(utf8ToWide(parent));
+    }
+
+    std::wstring targetExe = utf8ToWide(exeName + ".exe");
+    std::error_code ec;
+    const int maxDepth = 3;
+
+    for (const std::wstring& root : roots) {
+        if (!fs::exists(root, ec) || !fs::is_directory(root, ec)) continue;
+        try {
+            auto opts = fs::directory_options::skip_permission_denied;
+            for (auto it = fs::recursive_directory_iterator(root, opts, ec);
+                 it != fs::recursive_directory_iterator() && it.depth() <= maxDepth;
+                 it.increment(ec)) {
+                if (ec) { it.disable_recursion_pending(); it.increment(ec); continue; }
+                if (it->is_regular_file(ec)) {
+                    std::wstring name = it->path().filename().wstring();
+                    std::transform(name.begin(), name.end(), name.begin(), ::towlower);
+                    std::wstring lowerTarget = targetExe;
+                    std::transform(lowerTarget.begin(), lowerTarget.end(), lowerTarget.begin(), ::towlower);
+                    if (name == lowerTarget) {
+                        return dirOfExe(it->path().string());
+                    }
+                }
+            }
+        } catch (...) {
+            continue;
+        }
+    }
+    return "";
+}
+
+// 解析软件真实安装位置。
+// 注册表 InstallLocation 经常过时（如微信从 WeChat 目录迁移到 Weixin 目录），
+// 本函数在注册表读取后、残留判定前调用，按以下优先级修正 installLocation：
+//   1) 当前 installLocation 存在且包含可执行文件/卸载入口 → 保持
+//   2) DisplayIcon 指向的 exe 存在 → 使用该 exe 所在目录
+//   3) UninstallString 指向的卸载器存在 → 使用卸载器所在目录
+//   4) installLocation 不存在时，在其父目录下搜索同名/近名目录
+//   5) 仍找不到，基于主程序名在磁盘常见位置有限搜索
+static std::string resolveRealInstallLocation(const SoftwareInfo& sw) {
+    std::error_code ec;
+
+    // 1. 当前 InstallLocation 有效
+    if (!sw.installLocation.empty()) {
+        std::wstring wLoc = utf8ToWide(sw.installLocation);
+        if (fs::exists(wLoc, ec)) {
+            if (dirContainsExe(wLoc) || dirContainsUninstaller(wLoc)) {
+                return sw.installLocation;
+            }
+        }
+    }
+
+    // 2. DisplayIcon 指向的主程序目录
+    std::string iconExe = mainExeFromDisplayIcon(sw.displayIcon);
+    if (!iconExe.empty()) {
+        std::wstring wIconExe = utf8ToWide(iconExe);
+        if (fs::exists(wIconExe, ec)) {
+            return dirOfExe(iconExe);
+        }
+    }
+
+    // 3. UninstallString 指向的卸载器目录
+    std::string uninstallDir = extractDirFromUninstallString(sw.uninstallString);
+    if (!uninstallDir.empty()) {
+        std::wstring wUninstallDir = utf8ToWide(uninstallDir);
+        if (fs::exists(wUninstallDir, ec)) {
+            return uninstallDir;
+        }
+    }
+
+    // 4. installLocation 不存在时，在父目录下搜索
+    if (!sw.installLocation.empty()) {
+        std::string locParent = dirOfExe(sw.installLocation);
+        if (!locParent.empty()) {
+            std::string found = findSimilarDirectory(locParent, sw);
+            if (!found.empty()) return found;
+        }
+    }
+
+    // 5. 在磁盘里基于主程序名搜索
+    return findExeOnDisk(sw);
+}
+
+// 来源包括：DisplayIcon 主程序名、卸载程序所在目录名、DisplayName 中的英文单词，
+// 以及对中文名软件的特殊映射（如“微信”→ WeChat / Weixin）。
+// 用于残留判定：任一候选关键字命中正在运行的进程，即认为软件仍在使用，避免误判残留。
+static std::vector<std::string> collectProcessKeys(const std::string& displayName,
+                                                   const std::string& displayIcon,
+                                                   const std::string& uninstallExe) {
+    std::vector<std::string> keys;
+    auto addKey = [&keys](const std::string& raw) {
+        std::string k = raw;
+        // 去首尾空白
+        size_t a = 0, b = k.size();
+        while (a < b && std::isspace(static_cast<unsigned char>(k[a]))) ++a;
+        while (b > a && std::isspace(static_cast<unsigned char>(k[b - 1]))) --b;
+        if (a >= b) return;
+        k = k.substr(a, b - a);
+        if (k.size() < 2) return;
+        // 去重
+        if (std::find(keys.begin(), keys.end(), k) == keys.end())
+            keys.push_back(k);
+    };
+
+    // 1) DisplayIcon 主程序名
+    std::string iconExe = mainExeFromDisplayIcon(displayIcon);
+    if (!iconExe.empty()) {
+        size_t p = iconExe.find_last_of("\\/");
+        std::string name = (p == std::string::npos) ? iconExe : iconExe.substr(p + 1);
+        size_t d = name.rfind('.');
+        if (d != std::string::npos) name = name.substr(0, d);
+        addKey(name);
+    }
+
+    // 2) 卸载程序所在目录名（如 ...\WeChat\Uninstall.exe → WeChat）
+    if (!uninstallExe.empty()) {
+        std::string ud = dirOfExe(uninstallExe);
+        if (!ud.empty()) {
+            size_t p = ud.find_last_of("\\/");
+            std::string name = (p == std::string::npos) ? ud : ud.substr(p + 1);
+            addKey(name);
+        }
+    }
+
+    // 3) DisplayName 中的英文/数字单词，以及中文映射
+    if (!displayName.empty()) {
+        std::string lowerName = displayName;
+        std::transform(lowerName.begin(), lowerName.end(), lowerName.begin(), ::tolower);
+        if (lowerName.find("微信") != std::string::npos) {
+            addKey("WeChat");
+            addKey("Weixin");
+        }
+        if (lowerName.find("钉钉") != std::string::npos) {
+            addKey("DingTalk");
+            addKey("DingTalkLauncher");
+        }
+        if (lowerName.find("腾讯") != std::string::npos) {
+            addKey("Tencent");
+        }
+
+        std::string word;
+        for (char c : displayName) {
+            if (std::isalnum(static_cast<unsigned char>(c)) || c == '.' || c == '_') {
+                word.push_back(c);
+            } else if (!word.empty()) {
+                addKey(word);
+                word.clear();
+            }
+        }
+        if (!word.empty()) addKey(word);
+    }
+
+    return keys;
 }
 
 // 判断某个软件关键字（如 "WeChat"，无扩展名）当前是否有进程在运行。
@@ -903,6 +1233,12 @@ void SoftwareInfo::registryInit() {
     }
     this->publisher = Registry::readString(hive, regPath, "Publisher");
     this->displayIcon = Registry::readString(hive, regPath, "DisplayIcon");
+
+    // 修正 installLocation：注册表 InstallLocation 经常过时（如微信从 WeChat 迁移到 Weixin），
+    // 优先用 DisplayIcon / UninstallString 指向的真实路径修正；若仍失败则在父目录或
+    // 磁盘常见位置有限搜索，避免误判残留和“打开文件位置”错误。
+    this->installLocation = resolveRealInstallLocation(*this);
+
     this->helpLink = Registry::readString(hive, regPath, "HelpLink");
     this->urlInfoAbout = Registry::readString(hive, regPath, "URLInfoAbout");
 
@@ -949,25 +1285,15 @@ void SoftwareInfo::registryInit() {
                         // 最强护栏：若软件主程序进程当前正在运行，说明软件确在用
                         // （如微信：注册表路径已失效、WeChat.exe 文件已不在，但 WeChatAppEx
                         // 进程仍在跑），绝不判残留，避免误删正在使用的软件。
-                        // 进程匹配关键字来源：优先 DisplayIcon 主程序名；若 DisplayIcon 为空
-                        // （微信常见），回退用“卸载命令所在目录”的最后一段目录名（如 WeChat），
-                        // 前缀匹配即可命中 WeChatAppEx 这类进程。
-                        std::string procKey;
-                        std::string iconExePath = mainExeFromDisplayIcon(this->displayIcon);
-                        if (!iconExePath.empty()) {
-                            procKey = iconExePath.substr(iconExePath.find_last_of("\\/") + 1);
-                            size_t d = procKey.rfind('.');
-                            if (d != std::string::npos) procKey = procKey.substr(0, d);
-                        }
-                        if (procKey.empty()) {
-                            std::string ud = dirOfExe(exe);
-                            if (!ud.empty()) {
-                                size_t p = ud.find_last_of("\\/");
-                                procKey = (p == std::string::npos) ? ud : ud.substr(p + 1);
+                        // 候选关键字综合 DisplayIcon 主程序名、卸载目录名、DisplayName 英文单词
+                        // 以及中文名映射（“微信”→ WeChat/Weixin），任一命中即视为在用。
+                        std::vector<std::string> procKeys = collectProcessKeys(
+                            this->displayName, this->displayIcon, exe);
+                        for (const std::string& key : procKeys) {
+                            if (isProcessRunning(utf8ToWide(key))) {
+                                diagIconAlive = true;
+                                break;
                             }
-                        }
-                        if (!procKey.empty() && isProcessRunning(utf8ToWide(procKey))) {
-                            diagIconAlive = true;
                         }
                         if (!diagIconAlive) {
                         // 卸载入口缺失 + 主程序(DisplayIcon)也不在、且主程序进程未运行 → 注册表项即残留。
@@ -1004,30 +1330,44 @@ void SoftwareInfo::registryInit() {
     // 2) InstallLocation 为空且 DisplayIcon 也为空：该注册表项没有任何有效路径信息可指向实际
     //    安装的软件（如只剩 DisplayVersion 的空壳 Weixin 4.0.6.33），判为残留。
     // 仍保留 DisplayIcon 主程序存在性护栏，避免误删正在使用但卸载入口异常的软件。
+    // 最强护栏：无卸载命令时，若软件进程正在运行（如微信 UWP/Store 版），也不误判为残留。
     if (!this->isOrphaned && this->uninstallString.empty() && !this->isWindowsInstaller) {
-        if (!this->installLocation.empty()) {
-            std::wstring wLoc = utf8ToWide(this->installLocation);
-            std::error_code ec;
-            bool locExists = fs::exists(wLoc, ec);
-            bool locEmpty = true;
-            if (locExists) {
-                for (auto it = fs::directory_iterator(wLoc, ec);
-                     it != fs::directory_iterator() && locEmpty;
-                     it.increment(ec)) {
-                    if (!ec) locEmpty = false;
+        bool procAlive = false;
+        std::vector<std::string> procKeys = collectProcessKeys(
+            this->displayName, this->displayIcon, "");
+        for (const std::string& key : procKeys) {
+            if (isProcessRunning(utf8ToWide(key))) {
+                procAlive = true;
+                diagIconAlive = true;
+                break;
+            }
+        }
+
+        if (!procAlive) {
+            if (!this->installLocation.empty()) {
+                std::wstring wLoc = utf8ToWide(this->installLocation);
+                std::error_code ec;
+                bool locExists = fs::exists(wLoc, ec);
+                bool locEmpty = true;
+                if (locExists) {
+                    for (auto it = fs::directory_iterator(wLoc, ec);
+                         it != fs::directory_iterator() && locEmpty;
+                         it.increment(ec)) {
+                        if (!ec) locEmpty = false;
+                    }
                 }
-            }
-            bool iconAlive = false;
-            std::string iconExe = mainExeFromDisplayIcon(this->displayIcon);
-            if (!iconExe.empty() && fs::exists(utf8ToWide(iconExe))) {
-                iconAlive = true;
-            }
-            if (!iconAlive && (!locExists || locEmpty)) {
+                bool iconAlive = false;
+                std::string iconExe = mainExeFromDisplayIcon(this->displayIcon);
+                if (!iconExe.empty() && fs::exists(utf8ToWide(iconExe))) {
+                    iconAlive = true;
+                }
+                if (!iconAlive && (!locExists || locEmpty)) {
+                    this->isOrphaned = true;
+                    diagDirGone = !locExists;
+                }
+            } else if (this->displayIcon.empty() && !this->displayVersion.empty()) {
                 this->isOrphaned = true;
-                diagDirGone = !locExists;
             }
-        } else if (this->displayIcon.empty() && !this->displayVersion.empty()) {
-            this->isOrphaned = true;
         }
     }
 
@@ -1035,17 +1375,57 @@ void SoftwareInfo::registryInit() {
                    diagExeMissing, diagDirGone, diagIconAlive, diagUninstallDirGone, this->isOrphaned,
                    this->size);
 
-    // 将“更新 / 运行库 / Redistributable / .NET”这类系统组件归入“系统组件”分组，
-    // 默认列表里就会与用户软件分开显示，避免误卸载运行库。
+    // 将“更新 / 运行库 / Redistributable / .NET / Windows 内置组件”这类系统组件归入系统组件分组，
+    // 默认列表里就会与用户软件分开显示，避免误卸载运行库/系统功能。
     if (!this->displayName.empty() && !this->isSystemComponent) {
         std::string lowerName = this->displayName;
         transform(lowerName.begin(), lowerName.end(), lowerName.begin(), ::tolower);
 
-        if (lowerName.find("update") != std::string::npos ||
+        bool nameMatch =
+            lowerName == "addressbook" ||
+            lowerName == "directdrawex" ||
+            lowerName == "fontcore" ||
+            lowerName == "ie40" ||
+            lowerName == "ie4data" ||
+            lowerName == "ie5bakex" ||
+            lowerName == "ie5data" ||
+            lowerName == "iedata" ||
+            lowerName == "mobileoptionpack" ||
+            lowerName == "mplayer2" ||
+            lowerName.find("mstsc-") == 0;
+
+        bool updateMatch =
+            lowerName.find("update") != std::string::npos ||
             lowerName.find("redistributable") != std::string::npos ||
             lowerName.find("runtime") != std::string::npos ||
             lowerName == "microsoft visual c++" ||
-            lowerName.find(".net") != std::string::npos) {
+            lowerName.find(".net") != std::string::npos;
+
+        // 启发式：发布商为 Microsoft/Windows，且卸载入口是空的或只调用系统程序
+        //（如 rundll32/regsvr32/msiexec，或指向 System32/SysWOW64），无实际安装位置。
+        bool publisherMatch = false;
+        if (!this->publisher.empty()) {
+            std::string lowerPub = this->publisher;
+            transform(lowerPub.begin(), lowerPub.end(), lowerPub.begin(), ::tolower);
+            publisherMatch = (lowerPub.find("microsoft") != std::string::npos ||
+                              lowerPub.find("windows") != std::string::npos);
+        }
+        bool builtinUninstallerMatch = false;
+        if (!this->uninstallString.empty()) {
+            std::string lowerCmd = this->uninstallString;
+            transform(lowerCmd.begin(), lowerCmd.end(), lowerCmd.begin(), ::tolower);
+            builtinUninstallerMatch =
+                lowerCmd.find("rundll32") != std::string::npos ||
+                lowerCmd.find("regsvr32") != std::string::npos ||
+                lowerCmd.find("msiexec") != std::string::npos ||
+                lowerCmd.find("system32") != std::string::npos ||
+                lowerCmd.find("syswow64") != std::string::npos ||
+                lowerCmd.find("sysnative") != std::string::npos ||
+                lowerCmd.find("%systemroot%") != std::string::npos;
+        }
+        bool noRealLocation = this->installLocation.empty() && this->displayIcon.empty();
+
+        if (nameMatch || updateMatch || (publisherMatch && builtinUninstallerMatch && noRealLocation)) {
             this->isSystemComponent = true;
         }
     }
@@ -1056,6 +1436,24 @@ void SoftwareInfo::registryInit() {
         if (this->displayName.find(this->displayVersion) == std::string::npos &&
             this->displayName.find(this->displayVersion.substr(0, this->displayVersion.find('.'))) == std::string::npos) {
             this->displayName += " (" + this->displayVersion + ")";
+        }
+    }
+
+    // 运行时检测：判断该软件主程序进程当前是否在运行，用于「运行中」分组标记。
+    // 综合 DisplayName / DisplayIcon / UninstallString 推导进程关键字，前缀匹配进程列表。
+    // 与残留判定共用同一套关键字集合，保证「运行中」与「残留」逻辑一致。
+    {
+        std::string runExe = this->uninstallString.empty()
+                                 ? std::string()
+                                 : extractExeFromUninstallString(this->uninstallString);
+        std::vector<std::string> runKeys = collectProcessKeys(
+            this->displayName, this->displayIcon, runExe);
+        this->isRunningTime = false;
+        for (const std::string& key : runKeys) {
+            if (isProcessRunning(utf8ToWide(key))) {
+                this->isRunningTime = true;
+                break;
+            }
         }
     }
 
