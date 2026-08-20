@@ -1933,7 +1933,9 @@ void UninstallerWindow::openFileLocation() {
         }
     }
 
-    if (target.isEmpty()) {
+    // 最终校验：target 为空或实际不存在时，直接提示“找不到文件位置”，
+    // 不要调用 explorer，避免 Windows 把无效路径解释成“文档”夹。
+    if (target.isEmpty() || !QFileInfo(target).exists()) {
         QMessageBox::warning(this, getlang(0xFu).toString(), getlang(0x3B).toString());
         return;
     }

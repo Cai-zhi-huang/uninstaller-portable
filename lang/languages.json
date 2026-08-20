@@ -6602,8 +6602,8 @@
   ],
   [
    "Cannot open file location",
-   "无法打开文件位置",
-   "無法開啟檔案位置",
+   "找不到文件位置",
+   "找不到檔案位置",
    "ファイルの場所を開けません",
    "Impossible d'ouvrir l'emplacement du fichier",
    "No se puede abrir la ubicación del archivo",
