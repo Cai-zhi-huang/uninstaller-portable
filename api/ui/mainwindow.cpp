@@ -956,10 +956,10 @@ void UninstallerWindow::sorting() {
     for (int i = 0; i < len; i++) {
         auto sw = &m_softwareList[i];
         // 运行中软件不再独占一组（否则会被分组过滤 findlist 隐藏，从列表彻底消失）；
-        // 改为按原有类别归类显示在普通列表中，并在状态列以“运行中”标出。
+        // 空名称软件同样不再独占组 4（findlist 永远不含 4，会被整组隐藏、无法卸载），
+        // 二者都按原有类别归入普通组 0 显示，名称列以占位符标出。
         if (sw->isSystemComponent)m_swlist[2].push_back(sw);
         else if (sw->isWindowsInstaller)m_swlist[1].push_back(sw);
-        else if (sw->displayName.empty())m_swlist[4].push_back(sw);
         else m_swlist[0].push_back(sw);
     }
 
@@ -1078,7 +1078,12 @@ void UninstallerWindow::loadSoftwareList() {
         if (progress.wasCanceled()) break;
         if (!func::similarly(j.first, this->findlist))continue;
         for (const auto sw : j.second) {
-            auto* nameItem = new QTableWidgetItem(QString::fromStdString(sw->displayName));
+            // 空名称软件（DisplayName 缺失的注册表项）在名称列用占位符标出，
+            // 保证其可见、可辨识、可选中卸载（先前因归入组 4 被过滤隐藏）。
+            QString dispName = sw->displayName.empty()
+                ? QString::fromUtf8(u8"(未命名软件)")
+                : QString::fromStdString(sw->displayName);
+            auto* nameItem = new QTableWidgetItem(dispName);
             nameItem->setData(Qt::UserRole, QVariant::fromValue(reinterpret_cast<qintptr>(sw)));
             // 列表填充时使用“快速图标”：只从 DisplayIcon / UninstallString 指向的单个文件提取，
             // 不扫描安装目录/不枚举进程。这样进度条不会卡死，同时能恢复大部分真实图标。
