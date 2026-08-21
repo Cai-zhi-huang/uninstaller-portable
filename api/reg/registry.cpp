@@ -971,9 +971,13 @@ static QString diagLogPath() {
 static void logOrphanCheck(const std::string& name, const std::string& uninstallString,
                            bool exeMissing, bool dirGone, bool iconAlive, bool uninstallDirGone, bool orphaned,
                            const filesize_t& size) {
-    static bool first = true;
+    // 保护并行调用：registryInit 现经 QtConcurrent 并发执行，多个线程会同时进入本函数，
+    // 对 static first 的非原子读写是数据竞争（未定义行为）。用互斥锁串行化整个函数体。
+    static std::mutex s_logMtx;
     static const bool enabled = (std::getenv("UNINST_DBG") != nullptr);
-    if (!enabled) { first = false; return; }
+    if (!enabled) return;
+    std::lock_guard<std::mutex> lk(s_logMtx);
+    static bool first = true;
     std::ios::openmode mode = first ? std::ios::trunc : std::ios::app;
     first = false;
     QString logPath = diagLogPath();

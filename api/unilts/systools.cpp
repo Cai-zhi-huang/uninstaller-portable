@@ -7,6 +7,7 @@
 #include <thread>
 #include <windows.h>
 #include <QCoreApplication>
+#include <QThread>
 
 ll informat::getsize(std::string& path){
     if (path.empty()) return 0;
@@ -63,7 +64,12 @@ ll informat::getsize(std::string& path){
             }
             // 定期泵事件 + 检查时间，避免在单个目录上连续阻塞导致“未响应”
             if ((entryCount & (kPumpInterval - 1)) == 0) {
-                if (QCoreApplication::instance()) {
+                // 仅在 GUI 主线程里泵事件：getsize 现在会被 QtConcurrent 后台线程池并发调用
+                // （registryInit→getsize），从工作线程调用 QApplication::processEvents() 是 Qt 未定义行为
+                // （多线程同时泵主线程事件循环会造成重入/崩溃/偶发“未响应”）。后台线程本就不阻塞 GUI，
+                // 无需也不应泵事件；从前在主线程调用时仍保留泵事件以维持界面响应。
+                QCoreApplication* app = QCoreApplication::instance();
+                if (app && QThread::currentThread() == app->thread()) {
                     QCoreApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
                 }
                 auto now = std::chrono::steady_clock::now();
