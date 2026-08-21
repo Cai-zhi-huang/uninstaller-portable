@@ -830,8 +830,11 @@ void UninstallerWindow::built_list(bool allowCache) {
                 progress.setValue(v);
                 QApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
             });
+    // 并行扫描前只枚举一次进程名快照，所有 registryInit 任务只读复用，
+    // 避免几百个软件在后台线程各自 CreateToolhelp32Snapshot 一次（性能优化，行为不变）。
+    std::vector<std::wstring> runningProcs = Registry::snapshotRunningProcesses();
     watcher.setFuture(QtConcurrent::map(m_softwareList,
-        [](SoftwareInfo& sw) { sw.registryInit(); }));
+        [runningProcs](SoftwareInfo& sw) { sw.registryInit(runningProcs); }));
     loop.exec();
 
     for (auto& sw : m_softwareList) total_size += sw.size.size;

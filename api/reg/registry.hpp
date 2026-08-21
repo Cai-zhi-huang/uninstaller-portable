@@ -13,6 +13,10 @@ public:
     // 获取所有已安装软件
     static std::vector<SoftwareInfo> getAllInstalledSoftware();
 
+    // 枚举当前进程名快照（小写、去扩展名），供并行 registryInit 只读复用，
+    // 避免每个软件在后台线程各自 CreateToolhelp32Snapshot 一次（几百个软件可省下数百次快照）。
+    static std::vector<std::wstring> snapshotRunningProcesses();
+
     // 执行卸载
     static bool uninstallSoftware(const SoftwareInfo& software);
 

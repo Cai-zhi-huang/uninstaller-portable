@@ -42,6 +42,6 @@ struct SoftwareInfo {
     isWindowsInstaller(false),
     isOrphaned(false){}
     SoftwareInfo(std::string reg);
-    // 重新读取
-    void registryInit();
+    // 重新读取；runningProcs 为调用方在并行扫描前统一枚举的进程名快照（只读复用，小写、去扩展名）
+    void registryInit(const std::vector<std::wstring>& runningProcs);
 };

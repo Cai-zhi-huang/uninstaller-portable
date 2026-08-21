@@ -938,6 +938,14 @@ static void snapshotProcessNames(std::vector<std::wstring>& out) {
     CloseHandle(snap);
 }
 
+// 进程名快照入口：供并行扫描的调用方在 QtConcurrent::map 之前只枚举一次，
+// 返回小写、去扩展名后的进程名列表，供各 registryInit 任务只读复用。
+std::vector<std::wstring> Registry::snapshotRunningProcesses() {
+    std::vector<std::wstring> out;
+    snapshotProcessNames(out);
+    return out;
+}
+
 // 判断某个软件关键字（如 "WeChat"，无扩展名）当前是否有进程在运行。
 // 采用“前缀匹配”：进程名（去掉扩展名后）以该关键字开头即视为命中。
 // 理由：很多软件进程名与 DisplayIcon 文件名不一致（如微信 DisplayIcon 指向
@@ -1239,7 +1247,7 @@ SoftwareInfo::SoftwareInfo(std::string reg) :
     displayName = resolveDisplayName(hive, regPath, fallbackKey);
 }
 
-void SoftwareInfo::registryInit() {
+void SoftwareInfo::registryInit(const std::vector<std::wstring>& runningProcs) {
     // 读取各项信息 - readString 已通过宽字符 API 返回 UTF-8，直接供 Qt 使用
     this->displayVersion = Registry::readString(hive, regPath, "DisplayVersion");
     this->installDate = Registry::readString(hive, regPath, "InstallDate");
@@ -1288,10 +1296,8 @@ void SoftwareInfo::registryInit() {
     // 注册表项的就是残留（如 HP 系列：uninstall.exe 与主程序都没了，但更上层
     // 目录还在）。文件夹在 ≠ 软件在用。
     this->isOrphaned = false;
-    // 一次枚举全部进程名（已小写、无扩展名），供后续残留判定与运行中检测复用，
-    // 避免对每个进程关键字都 CreateToolhelp32Snapshot（并行扫描几百个软件时尤为明显）。
-    std::vector<std::wstring> runningProcs;
-    snapshotProcessNames(runningProcs);
+    // runningProcs 由调用方在并行扫描前只枚举一次（Registry::snapshotRunningProcesses），
+    // 本函数只读复用，避免每个软件在后台线程各自 CreateToolhelp32Snapshot（几百个软件可省下数百次快照）。
     bool diagExeMissing = false, diagDirGone = false, diagIconAlive = false, diagUninstallDirGone = false;
     if (!this->uninstallString.empty() && !this->isWindowsInstaller) {
         std::string lowerCmd = this->uninstallString;
