@@ -346,8 +346,15 @@ bool Registry::uninstallSoftware(const SoftwareInfo& software) {
     sei.lpDirectory = dir.empty() ? NULL : dir.c_str();
     sei.nShow = SW_NORMAL; // 显示卸载向导，让用户可见可操作
 
-    if (!ShellExecuteExW(&sei) || !sei.hProcess) {
+    if (!ShellExecuteExW(&sei)) {
         return false;
+    }
+
+    // 少数卸载器/启动器在 SEE_MASK_NOCLOSEPROCESS 下也不返回进程句柄（hProcess 为 NULL）。
+    // 此时卸载其实已被成功发起，只是无法跟踪其退出码——不应误报“卸载失败”（否则会误导用户、
+    // 且列表不会刷新）。直接视为已发起并返回成功。
+    if (!sei.hProcess) {
+        return true;
     }
 
     // MSI 静默卸载通常很快结束；普通 EXE 卸载向导会一直等待用户操作（用 INFINITE）。
