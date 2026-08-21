@@ -1081,7 +1081,7 @@ void UninstallerWindow::loadSoftwareList() {
             // 空名称软件（DisplayName 缺失的注册表项）在名称列用占位符标出，
             // 保证其可见、可辨识、可选中卸载（先前因归入组 4 被过滤隐藏）。
             QString dispName = sw->displayName.empty()
-                ? QString::fromUtf8(u8"(未命名软件)")
+                ? getlang(0x50).toString()
                 : QString::fromStdString(sw->displayName);
             auto* nameItem = new QTableWidgetItem(dispName);
             nameItem->setData(Qt::UserRole, QVariant::fromValue(reinterpret_cast<qintptr>(sw)));
@@ -1103,7 +1103,7 @@ void UninstallerWindow::loadSoftwareList() {
 
             // 状态列：残留项标记红色“残留”
             if (sw->isOrphaned) {
-                auto* statusItem = new QTableWidgetItem(QString::fromUtf8(u8"残留"));
+                auto* statusItem = new QTableWidgetItem(getlang(0x49).toString());
                 QFont sf = statusItem->font();
                 sf.setBold(true);
                 statusItem->setFont(sf);
@@ -1115,7 +1115,7 @@ void UninstallerWindow::loadSoftwareList() {
                 nameItem->setFont(nf);
             } else if (sw->isRunningTime) {
                 // 运行中：蓝色加粗标注，方便用户识别当前正在运行的程序（不再因独占分组而消失）
-                auto* statusItem = new QTableWidgetItem(QString::fromUtf8(u8"运行中"));
+                auto* statusItem = new QTableWidgetItem(getlang(0x4A).toString());
                 QFont sf = statusItem->font();
                 sf.setBold(true);
                 statusItem->setFont(sf);
@@ -1123,12 +1123,12 @@ void UninstallerWindow::loadSoftwareList() {
                 m_tableWidget->setItem(i, 6, statusItem);
             } else if (isCriticalSystemItem(sw)) {
                 // ⑦ 系统关键项：灰显并标注“不建议卸载”
-                auto* statusItem = new QTableWidgetItem(QString::fromUtf8(u8"系统关键"));
+                auto* statusItem = new QTableWidgetItem(getlang(0x4C).toString());
                 statusItem->setForeground(QColor(0x9E, 0x9E, 0x9E));
                 m_tableWidget->setItem(i, 6, statusItem);
                 nameItem->setForeground(QColor(0x9E, 0x9E, 0x9E));
             } else {
-                m_tableWidget->setItem(i, 6, new QTableWidgetItem(QString::fromUtf8(u8"正常")));
+                m_tableWidget->setItem(i, 6, new QTableWidgetItem(getlang(0x4B).toString()));
             }
 
             ts += sw->size.size;
@@ -1426,9 +1426,9 @@ void UninstallerWindow::onTableContextMenu(const QPoint& pos) {
     QAction* actOpen = menu.addAction(getlang(0x39).toString());
     menu.addSeparator();
     QAction* actCopy = menu.addAction(getlang(0x2F).toString());
-    QAction* actLocate = menu.addAction(QString::fromUtf8(u8"在注册表中定位"));
-    QAction* actDelReg = menu.addAction(QString::fromUtf8(u8"删除残留注册表项"));
-    QAction* actForceDel = menu.addAction(QString::fromUtf8(u8"强制删除此条目"));
+    QAction* actLocate = menu.addAction(getlang(0x4D).toString());
+    QAction* actDelReg = menu.addAction(getlang(0x4E).toString());
+    QAction* actForceDel = menu.addAction(getlang(0x4F).toString());
 
     // 选中右键所在行，再触发与按钮相同的逻辑
     connect(actUninstall, &QAction::triggered, this, [this, row]() {
@@ -1700,7 +1700,7 @@ void UninstallerWindow::uninstallSelf() {
 // 关于对话框：集中展示应用名称与版本号（版本号来自 version.hpp 的 appVersionFull()）。
 void UninstallerWindow::showAbout() {
     QMessageBox::about(this,
-        QString::fromUtf8(u8"关于 卸载管理器"),
+        getlang(0x40).toString() + QString::fromUtf8(u8" 卸载管理器"),
         QString::fromUtf8(u8"卸载管理器\n版本 %1\n\n"
             "一款用于查看、卸载与清理 Windows 已安装软件及残留项的工具。\n"
             "基于 Qt 6 与 C++ 构建。").arg(appVersionFull()));
@@ -1736,7 +1736,7 @@ void UninstallerWindow::showUpdatePopup() {
     title->setStyleSheet("font-size:18px; font-weight:bold; color:#1a1a1a;");
     layout->addWidget(title);
 
-    QLabel* sub = new QLabel(QString::fromUtf8(u8"本次更新内容："), &dlg);
+    QLabel* sub = new QLabel(getlang(0x51).toString(), &dlg);
     sub->setStyleSheet("color:#555555;");
     layout->addWidget(sub);
 
@@ -1755,10 +1755,10 @@ void UninstallerWindow::showUpdatePopup() {
     te->setFixedHeight(230);
     layout->addWidget(te);
 
-    QCheckBox* cb = new QCheckBox(QString::fromUtf8(u8"不再提示此版本"), &dlg);
+    QCheckBox* cb = new QCheckBox(getlang(0x52).toString(), &dlg);
     layout->addWidget(cb);
 
-    QPushButton* ok = new QPushButton(QString::fromUtf8(u8"知道了"), &dlg);
+    QPushButton* ok = new QPushButton(getlang(0x53).toString(), &dlg);
     ok->setDefault(true);
     QHBoxLayout* btnRow = new QHBoxLayout();
     btnRow->addStretch();
@@ -1828,8 +1828,9 @@ void UninstallerWindow::showDetailDialog(int row) {
     QString typeStr = sw->isWindowsInstaller ? "Windows Installer (MSI)"
                      : sw->isSystemComponent ? "系统组件" : "普通程序";
     form->addRow("类型", new QLabel(typeStr));
-    QString statusStr = sw->isOrphaned ? QString::fromUtf8(u8"残留（卸载程序不存在）") : QString::fromUtf8(u8"正常");
-    form->addRow(QString::fromUtf8(u8"状态"), new QLabel(statusStr));
+    QString statusStr = sw->isOrphaned ? (getlang(0x49).toString() + QString::fromUtf8(u8"（卸载程序不存在）"))
+                                        : getlang(0x4B).toString();
+    form->addRow(getlang(0x42).toString(), new QLabel(statusStr));
     form->addRow(getlang(0x2A).toString(), roLine(stripQuotes(QString::fromStdString(sw->installLocation))));
     form->addRow("注册表位置", roLine(QString::fromStdString(sw->orgPath)));
 
@@ -1860,10 +1861,10 @@ void UninstallerWindow::showDetailDialog(int row) {
     funcGrid->addWidget(btnUninstall, 0, 1);
     funcGrid->addWidget(btnScan, 1, 0);
     funcGrid->addWidget(btnCopy, 1, 1);
-    QPushButton* btnDelReg = new QPushButton(QString::fromUtf8(u8"删除残留注册表项"));
+    QPushButton* btnDelReg = new QPushButton(getlang(0x4E).toString());
     btnDelReg->setObjectName("uninstallBtn");
     funcGrid->addWidget(btnDelReg, 2, 0, 1, 2);
-    QPushButton* btnForceDel = new QPushButton(QString::fromUtf8(u8"强制删除此条目"));
+    QPushButton* btnForceDel = new QPushButton(getlang(0x4F).toString());
     btnForceDel->setObjectName("uninstallBtn");
     funcGrid->addWidget(btnForceDel, 3, 0, 1, 2);
     root->addLayout(funcGrid);
@@ -2508,6 +2509,10 @@ void UninstallerWindow::retranslateUI() {
         if (dacts.size() > 3) dacts[3]->setText(getlang(0x30).toString());
     }
     if (m_langMenu) m_langMenu->setTitle(getlang(0x3D).toString());
+    // 视图菜单标题 + 亮/暗主题项随界面语言翻译
+    if (m_viewMenu) m_viewMenu->setTitle(getlang(0x43).toString());
+    if (m_lightThemeAct) m_lightThemeAct->setText(getlang(0x44).toString());
+    if (m_darkThemeAct) m_darkThemeAct->setText(getlang(0x45).toString());
     // 语言菜单项随当前界面语言翻译：用 langName(idx, G.LANGUAGE) 改写每个动作文本。
     // （大区分组标题来自 families，保持中文不变。）
     for (size_t i = 0; i < m_langActions.size(); ++i) {
@@ -2523,7 +2528,7 @@ void UninstallerWindow::retranslateUI() {
     if (m_scanLabel) m_scanLabel->setText(getlang(0x24).toString());
     if (m_searchEdit) m_searchEdit->setPlaceholderText(getlang(0x22).toString());
     if (m_refreshBtn) m_refreshBtn->setText(getlang(0x23).toString());
-    if (m_orphanOnlyCheck) m_orphanOnlyCheck->setText(QString::fromUtf8(u8"仅显示残留项"));
+    if (m_orphanOnlyCheck) m_orphanOnlyCheck->setText(getlang(0x48).toString());
 
     // 表格表头
     if (m_tableWidget) {
@@ -2539,6 +2544,8 @@ void UninstallerWindow::retranslateUI() {
     if (m_uninstallBtn) m_uninstallBtn->setText(getlang(0x1f).toString());
     if (m_scanBtn) m_scanBtn->setText(getlang(0x20).toString());
     if (m_detailsBtn) m_detailsBtn->setText(getlang(0x21).toString());
+    if (m_batchUninstallBtn) m_batchUninstallBtn->setText(getlang(0x46).toString());
+    if (m_batchDelBtn) m_batchDelBtn->setText(getlang(0x47).toString());
 
     // 状态栏：用新语言重算“共找到 N 个软件，共占 ...”提示
     filterSoftware();
@@ -2594,9 +2601,9 @@ void UninstallerWindow::setupUI() {
     m_devMenu->addAction(getlang(0x30).toString(), this, &UninstallerWindow::showDevInfo);
 
     // ⑨ 视图/主题菜单
-    m_viewMenu = bar->addMenu(QString::fromUtf8(u8"视图"));
-    m_lightThemeAct = m_viewMenu->addAction(QString::fromUtf8(u8"亮色主题"));
-    m_darkThemeAct = m_viewMenu->addAction(QString::fromUtf8(u8"暗色主题"));
+    m_viewMenu = bar->addMenu(getlang(0x43).toString());
+    m_lightThemeAct = m_viewMenu->addAction(getlang(0x44).toString());
+    m_darkThemeAct = m_viewMenu->addAction(getlang(0x45).toString());
     // 互斥单选：同一时刻只能勾一个（避免“亮/暗同时选中”）
     QActionGroup* themeGroup = new QActionGroup(this);
     themeGroup->setExclusive(true);
@@ -2642,7 +2649,7 @@ void UninstallerWindow::setupUI() {
     toolBar->addWidget(m_refreshBtn);
 
     // 仅显示残留项过滤
-    m_orphanOnlyCheck = new QCheckBox(QString::fromUtf8(u8"仅显示残留项"), this);
+    m_orphanOnlyCheck = new QCheckBox(getlang(0x48).toString(), this);
     connect(m_orphanOnlyCheck, &QCheckBox::toggled, this, [this](bool on) {
         m_showOrphanOnly = on;
         filterSoftware();
@@ -2686,10 +2693,10 @@ void UninstallerWindow::setupUI() {
     // 按钮栏
     QHBoxLayout* buttonBar = new QHBoxLayout();
 
-    m_batchUninstallBtn = new QPushButton(QString::fromUtf8(u8"批量卸载"), this);
+    m_batchUninstallBtn = new QPushButton(getlang(0x46).toString(), this);
     m_batchUninstallBtn->setObjectName("batchUninstallBtn");
     connect(m_batchUninstallBtn, &QPushButton::clicked, this, &UninstallerWindow::batchUninstall);
-    m_batchDelBtn = new QPushButton(QString::fromUtf8(u8"批量删残留"), this);
+    m_batchDelBtn = new QPushButton(getlang(0x47).toString(), this);
     m_batchDelBtn->setObjectName("batchDelBtn");
     connect(m_batchDelBtn, &QPushButton::clicked, this, &UninstallerWindow::batchDeleteResiduals);
 
