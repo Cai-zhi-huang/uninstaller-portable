@@ -955,8 +955,9 @@ void UninstallerWindow::sorting() {
     int len = m_softwareList.size();
     for (int i = 0; i < len; i++) {
         auto sw = &m_softwareList[i];
-        if (sw->isRunningTime)m_swlist[3].push_back(sw);
-        else if (sw->isSystemComponent)m_swlist[2].push_back(sw);
+        // 运行中软件不再独占一组（否则会被分组过滤 findlist 隐藏，从列表彻底消失）；
+        // 改为按原有类别归类显示在普通列表中，并在状态列以“运行中”标出。
+        if (sw->isSystemComponent)m_swlist[2].push_back(sw);
         else if (sw->isWindowsInstaller)m_swlist[1].push_back(sw);
         else if (sw->displayName.empty())m_swlist[4].push_back(sw);
         else m_swlist[0].push_back(sw);
@@ -1107,6 +1108,14 @@ void UninstallerWindow::loadSoftwareList() {
                 QFont nf = nameItem->font();
                 nameItem->setForeground(QColor(0xD9, 0x7A, 0x7A));
                 nameItem->setFont(nf);
+            } else if (sw->isRunningTime) {
+                // 运行中：蓝色加粗标注，方便用户识别当前正在运行的程序（不再因独占分组而消失）
+                auto* statusItem = new QTableWidgetItem(QString::fromUtf8(u8"运行中"));
+                QFont sf = statusItem->font();
+                sf.setBold(true);
+                statusItem->setFont(sf);
+                statusItem->setForeground(QColor(0x4A, 0x90, 0xE2));
+                m_tableWidget->setItem(i, 6, statusItem);
             } else if (isCriticalSystemItem(sw)) {
                 // ⑦ 系统关键项：灰显并标注“不建议卸载”
                 auto* statusItem = new QTableWidgetItem(QString::fromUtf8(u8"系统关键"));
@@ -1992,7 +2001,9 @@ void UninstallerWindow::exportSoftwareList() {
                       QString::fromStdString(sw->installDate),
                       QString::fromStdString(sw->size.get()),
                       QString::fromStdString(sw->installLocation),
-                      sw->isOrphaned ? QString::fromUtf8(u8"残留") : QString::fromUtf8(u8"正常") });
+                      sw->isOrphaned ? QString::fromUtf8(u8"残留")
+                                     : (sw->isRunningTime ? QString::fromUtf8(u8"运行中")
+                                                          : QString::fromUtf8(u8"正常")) });
     }
 
     QString lower = fileName.toLower();
