@@ -1229,7 +1229,9 @@ void UninstallerWindow::uninstallSelected() {
             scanResiduals();
         }
         // ② 重新扫描注册表，让列表反映真实状态（已卸载的条目会消失）
-        built_list();
+        //    用 built_list(false) 强制重扫：若默认 allowCache=true 且当前处于
+        //    缓存命中窗口(启动1小时内)，会直接返回旧缓存导致刚卸载的条目不消失。
+        built_list(false);
         loadSoftwareList();
     }
     else {
@@ -1297,8 +1299,8 @@ void UninstallerWindow::batchUninstall() {
     QMessageBox::information(this, QString::fromUtf8(u8"批量卸载完成"),
         QString::fromUtf8(u8"成功卸载 %1 / %2 个程序。").arg(ok).arg(toUninstall.size()));
 
-    // ② 统一重扫
-    built_list();
+    // ② 统一重扫（强制重扫，确保已卸载条目立即从列表消失）
+    built_list(false);
     loadSoftwareList();
 }
 
@@ -1394,8 +1396,8 @@ void UninstallerWindow::batchDeleteResiduals() {
     if (ok) {
         QMessageBox::information(this, QString::fromUtf8(u8"已完成"),
             QString::fromUtf8(u8"已删除 %1 个残留文件/目录（已送回收站，可恢复）。").arg(allResiduals.size()));
-        // ② 重扫
-        built_list();
+        // ② 重扫（强制重扫，确保已删除残留立即从列表消失）
+        built_list(false);
         loadSoftwareList();
     } else {
         QString hint = informat::diagnoseDeleteFailure(allResiduals);
@@ -1524,8 +1526,8 @@ void UninstallerWindow::scanResiduals() {
         if (Registry::deleteResidualFiles(residuals)) {
             QMessageBox::information(&dialog, getlang(0xD).toString(), getlang(0x19).toString());
             dialog.accept();
-            // ② 删除成功后重新扫描，让列表反映真实状态
-            built_list();
+            // ② 删除成功后重新扫描，让列表反映真实状态（强制重扫）
+            built_list(false);
             loadSoftwareList();
         }
         else {
@@ -1567,8 +1569,8 @@ void UninstallerWindow::deleteRegistryEntry() {
 
     if (ok) {
         QMessageBox::information(this, QString::fromUtf8(u8"成功"), QString::fromUtf8(u8"注册表项已删除。"));
-        // 重新扫描注册表，让列表反映真实状态（残留条目会消失）
-        built_list();
+        // 重新扫描注册表，让列表反映真实状态（残留条目会消失，强制重扫）
+        built_list(false);
         loadSoftwareList();
     }
     else {
@@ -1631,8 +1633,8 @@ void UninstallerWindow::forceDeleteEntry() {
         }
         QMessageBox::information(this, QString::fromUtf8(u8"已完成"),
             QString::fromUtf8(u8"已强制删除该软件条目。%1").arg(extra));
-        // 重新扫描注册表，让列表反映真实状态（该条目会消失）
-        built_list();
+        // 重新扫描注册表，让列表反映真实状态（该条目会消失，强制重扫）
+        built_list(false);
         loadSoftwareList();
     }
     else {
@@ -2638,7 +2640,7 @@ void UninstallerWindow::setupUI() {
     m_refreshBtn = new QPushButton(getlang(0x23).toString(), this);
     m_refreshBtn->setObjectName("refreshBtn");
     connect(m_refreshBtn, &QPushButton::clicked, this, [this]() {
-        built_list();       // 重新扫描注册表（反映新装/卸载的软件）
+        built_list(false);  // 强制重新扫描注册表（反映新装/卸载的软件，不受缓存窗口影响）
         loadSoftwareList(); // 重新加载并套用当前搜索过滤
     });
 
