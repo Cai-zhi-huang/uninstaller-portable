@@ -909,6 +909,28 @@ static std::vector<std::string> collectProcessKeys(const std::string& displayNam
     return keys;
 }
 
+// 进程名快照：一次枚举全部进程，把每个进程名（去掉扩展名、转小写）存入 out，
+// 供 isProcessRunning 的前缀匹配复用。原先 isProcessRunning 每次调用都 CreateToolhelp32Snapshot，
+// 而一次 registryInit 里残留判定 + 运行中检测会对多个关键字各调一次，几百个软件并行扫描时
+// 快照次数可达上千，既慢又无必要。改为每个 registryInit 只快照一次（见 registryInit 开头）。
+static void snapshotProcessNames(std::vector<std::wstring>& out) {
+    out.clear();
+    HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (snap == INVALID_HANDLE_VALUE) return;
+    PROCESSENTRY32W pe;
+    pe.dwSize = sizeof(pe);
+    if (Process32FirstW(snap, &pe)) {
+        do {
+            std::wstring p = pe.szExeFile;
+            size_t dot = p.rfind(L'.');
+            if (dot != std::wstring::npos) p = p.substr(0, dot);  // 去掉扩展名
+            std::transform(p.begin(), p.end(), p.begin(), ::towlower);
+            out.push_back(std::move(p));
+        } while (Process32NextW(snap, &pe));
+    }
+    CloseHandle(snap);
+}
+
 // 判断某个软件关键字（如 "WeChat"，无扩展名）当前是否有进程在运行。
 // 采用“前缀匹配”：进程名（去掉扩展名后）以该关键字开头即视为命中。
 // 理由：很多软件进程名与 DisplayIcon 文件名不一致（如微信 DisplayIcon 指向
@@ -918,26 +940,17 @@ static std::vector<std::string> collectProcessKeys(const std::string& displayNam
 // 只要该软件的主程序进程仍在跑（如微信：注册表路径失效、WeChat.exe 已不在，但
 // WeChatAppEx 进程在运行），就绝不判为残留，避免误删正在使用的软件。
 // 基于文件名（不依赖文件路径/存在性）匹配，因此也能覆盖“路径失效但在用”的软件。
-static bool isProcessRunning(const std::wstring& key) {
+// procs 由 snapshotProcessNames 预先生成（已小写、无扩展名），避免反复枚举进程快照。
+static bool isProcessRunning(const std::wstring& key, const std::vector<std::wstring>& procs) {
     if (key.empty() || key.size() < 4) return false;
-    HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
-    if (snap == INVALID_HANDLE_VALUE) return false;
-    PROCESSENTRY32W pe;
-    pe.dwSize = sizeof(pe);
-    bool found = false;
-    if (Process32FirstW(snap, &pe)) {
-        do {
-            std::wstring p = pe.szExeFile;
-            size_t dot = p.rfind(L'.');
-            if (dot != std::wstring::npos) p = p.substr(0, dot);  // 去掉扩展名
-            if (p.size() >= key.size() && _wcsnicmp(p.c_str(), key.c_str(), key.size()) == 0) {
-                found = true;
-                break;
-            }
-        } while (Process32NextW(snap, &pe));
+    std::wstring k = key;
+    std::transform(k.begin(), k.end(), k.begin(), ::towlower);
+    for (const std::wstring& p : procs) {
+        if (p.size() >= k.size() && _wcsnicmp(p.c_str(), k.c_str(), k.size()) == 0) {
+            return true;
+        }
     }
-    CloseHandle(snap);
-    return found;
+    return false;
 }
 
 // 诊断日志路径：写到 AppData 本地数据目录（如 C:\Users\x\AppData\Local\uninstaller-portable\），
@@ -1264,6 +1277,10 @@ void SoftwareInfo::registryInit() {
     // 注册表项的就是残留（如 HP 系列：uninstall.exe 与主程序都没了，但更上层
     // 目录还在）。文件夹在 ≠ 软件在用。
     this->isOrphaned = false;
+    // 一次枚举全部进程名（已小写、无扩展名），供后续残留判定与运行中检测复用，
+    // 避免对每个进程关键字都 CreateToolhelp32Snapshot（并行扫描几百个软件时尤为明显）。
+    std::vector<std::wstring> runningProcs;
+    snapshotProcessNames(runningProcs);
     bool diagExeMissing = false, diagDirGone = false, diagIconAlive = false, diagUninstallDirGone = false;
     if (!this->uninstallString.empty() && !this->isWindowsInstaller) {
         std::string lowerCmd = this->uninstallString;
@@ -1290,7 +1307,7 @@ void SoftwareInfo::registryInit() {
                         std::vector<std::string> procKeys = collectProcessKeys(
                             this->displayName, this->displayIcon, exe);
                         for (const std::string& key : procKeys) {
-                            if (isProcessRunning(utf8ToWide(key))) {
+                            if (isProcessRunning(utf8ToWide(key), runningProcs)) {
                                 diagIconAlive = true;
                                 break;
                             }
@@ -1336,7 +1353,7 @@ void SoftwareInfo::registryInit() {
         std::vector<std::string> procKeys = collectProcessKeys(
             this->displayName, this->displayIcon, "");
         for (const std::string& key : procKeys) {
-            if (isProcessRunning(utf8ToWide(key))) {
+            if (isProcessRunning(utf8ToWide(key), runningProcs)) {
                 procAlive = true;
                 diagIconAlive = true;
                 break;
@@ -1450,7 +1467,7 @@ void SoftwareInfo::registryInit() {
             this->displayName, this->displayIcon, runExe);
         this->isRunningTime = false;
         for (const std::string& key : runKeys) {
-            if (isProcessRunning(utf8ToWide(key))) {
+            if (isProcessRunning(utf8ToWide(key), runningProcs)) {
                 this->isRunningTime = true;
                 break;
             }

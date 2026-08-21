@@ -2011,17 +2011,17 @@ void UninstallerWindow::exportSoftwareList() {
                "<th>名称</th><th>版本</th><th>发行商</th><th>安装日期</th><th>大小</th><th>安装位置</th><th>状态</th>"
                "</tr></thead><tbody>\n";
         for (const auto& r : rows) {
-            auto esc = [](const QString& s) {
-                QString e = s;
-                e.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;");
-                return e.toHtmlEscaped();
-            };
+            // 仅用 toHtmlEscaped() 做转义；不要再手工替换 & < >，否则会与
+            // toHtmlEscaped 内部转义叠加造成双重转义（浏览器里 & 会变成字面 &amp;）。
+            auto esc = [](const QString& s) { return s.toHtmlEscaped(); };
             out << "<tr><td>" << esc(r.name) << "</td><td>" << esc(r.ver) << "</td><td>"
                 << esc(r.pub) << "</td><td>" << esc(r.date) << "</td><td>" << esc(r.size)
                 << "</td><td>" << esc(r.loc) << "</td><td>" << esc(r.status) << "</td></tr>\n";
         }
         out << "</tbody></table></body></html>";
     } else if (lower.endsWith(".csv")) {
+        // 写 UTF-8 BOM，使 Excel 能正确识别中文（否则默认按 ANSI 解析会乱码）。
+        out.setGenerateByteOrderMark(true);
         // CSV：字段含逗号/引号/换行时按 RFC4180 用双引号包裹并转义内部引号。
         auto csvCell = [](const QString& s) -> QString {
             QString cell = s;
@@ -2038,6 +2038,8 @@ void UninstallerWindow::exportSoftwareList() {
                 << csvCell(r.status) << "\n";
         }
     } else {
+        // 文本/TSV 也写 UTF-8 BOM，避免 Excel 打开中文乱码。
+        out.setGenerateByteOrderMark(true);
         out << "Name\tVersion\tPublisher\tInstallDate\tSize\tLocation\tStatus\n";
         for (const auto& r : rows) {
             out << r.name << "\t" << r.ver << "\t" << r.pub << "\t" << r.date << "\t"
