@@ -1147,7 +1147,16 @@ void UninstallerWindow::loadSoftwareList() {
     m_tableWidget->setRowCount(i);
     m_tableWidget->resizeColumnsToContents();
     m_tableWidget->setSortingEnabled(true);
-    m_tableWidget->sortItems(0, Qt::AscendingOrder);
+    // 保留用户此前设置的排序列/方向：重扫（卸载/删除/刷新）后不再强制回到
+    // “名称升序”，否则用户刚按大小排好的列表会被重置，体验差。
+    // 仅当从未手动排序过（sortIndicatorSection<0）时才回退默认名称升序。
+    int sortCol = m_tableWidget->horizontalHeader()->sortIndicatorSection();
+    Qt::SortOrder sortOrder = m_tableWidget->horizontalHeader()->sortIndicatorOrder();
+    if (sortCol >= 0) {
+        m_tableWidget->sortItems(sortCol, sortOrder);
+    } else {
+        m_tableWidget->sortItems(0, Qt::AscendingOrder);
+    }
     progress.close();
 
     // 后台图标懒加载已禁用：ExtractIconExW/DrawIconEx/GDI 在后台线程与 Qt 主线程
