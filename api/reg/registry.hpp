@@ -8,6 +8,14 @@
 #include "struct.hpp"
 #include "coding.hpp"
 
+// 卸载结果三态：区分「成功 / 失败 / 用户取消」，避免把用户主动取消（如拒绝 UAC 提权、
+// 在 MSI/EXE 向导里点取消）误报成「卸载失败」，从而误导用户、并错误地让列表不刷新。
+enum class UninstallResult {
+    Success,   // 卸载完成（含 MSI 成功但需重启 3010/1641）
+    Failed,    // 启动失败或卸载过程出错
+    Canceled   // 用户取消（UAC 提权被拒 / MSI 向导取消）
+};
+
 class Registry {
 public:
     // 获取所有已安装软件
@@ -17,8 +25,8 @@ public:
     // 避免每个软件在后台线程各自 CreateToolhelp32Snapshot 一次（几百个软件可省下数百次快照）。
     static std::vector<std::wstring> snapshotRunningProcesses();
 
-    // 执行卸载
-    static bool uninstallSoftware(const SoftwareInfo& software);
+    // 执行卸载，返回三态结果（成功 / 失败 / 用户取消）
+    static UninstallResult uninstallSoftware(const SoftwareInfo& software);
 
     // 返回将要执行的卸载命令行（供执行与 UI 预览共用）
     static std::string getUninstallCommand(const SoftwareInfo& software);

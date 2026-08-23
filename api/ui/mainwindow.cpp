@@ -1182,8 +1182,8 @@ bool UninstallerWindow::tick(const ll& row) {
 }
 
 // 执行单个卸载（不含确认/预览），单条与批量共用。返回是否成功。
-bool UninstallerWindow::doUninstall(SoftwareInfo* software) {
-    if (!software) return false;
+UninstallResult UninstallerWindow::doUninstall(SoftwareInfo* software) {
+    if (!software) return UninstallResult::Failed;
     QString name = QString::fromStdString(software->displayName);
     QProgressDialog progress(getlang(0xCu).toString().arg(name),
         getlang(0x3u).toString(), 0, 0, this);
@@ -1191,9 +1191,9 @@ bool UninstallerWindow::doUninstall(SoftwareInfo* software) {
     progress.setMinimumDuration(0);
     progress.show();
     QApplication::processEvents();
-    bool success = Registry::uninstallSoftware(*software);
+    UninstallResult result = Registry::uninstallSoftware(*software);
     progress.close();
-    return success;
+    return result;
 }
 
 void UninstallerWindow::uninstallSelected() {
@@ -1231,14 +1231,14 @@ void UninstallerWindow::uninstallSelected() {
     if (m_busy) return;
     m_busy = true;
 
-    bool success = doUninstall(software);
+    UninstallResult result = doUninstall(software);
 
-    if (success) {
-        QMessageBox::StandardButton result = QMessageBox::question(
+    if (result == UninstallResult::Success) {
+        QMessageBox::StandardButton res = QMessageBox::question(
             this, getlang(0xDu).toString(), getlang(0xEu).toString(),
             QMessageBox::Yes | QMessageBox::No);
 
-        if (result == QMessageBox::Yes) {
+        if (res == QMessageBox::Yes) {
             scanResiduals();
         }
         // ② 重新扫描注册表，让列表反映真实状态（已卸载的条目会消失）
@@ -1246,6 +1246,11 @@ void UninstallerWindow::uninstallSelected() {
         //    缓存命中窗口(启动1小时内)，会直接返回旧缓存导致刚卸载的条目不消失。
         built_list(false);
         loadSoftwareList();
+    }
+    else if (result == UninstallResult::Canceled) {
+        // 用户主动取消（拒绝 UAC 提权 / 在向导里点取消）：未做任何更改，不应误报失败。
+        QMessageBox::information(this, QString::fromUtf8(u8"已取消"),
+            QString::fromUtf8(u8"「%1」的卸载已取消，未做任何更改。").arg(name));
     }
     else {
         QMessageBox::critical(this, getlang(0xFu).toString(), getlang(0x10u).toString());
@@ -1303,14 +1308,23 @@ void UninstallerWindow::batchUninstall() {
 
     if (m_busy) return;
     m_busy = true;
-    int ok = 0;
+    int ok = 0, canceled = 0, failed = 0;
     for (auto sw : toUninstall) {
-        if (doUninstall(sw)) ++ok;
+        UninstallResult r = doUninstall(sw);
+        if (r == UninstallResult::Success) ++ok;
+        else if (r == UninstallResult::Canceled) ++canceled;
+        else ++failed;
     }
     m_busy = false;
 
-    QMessageBox::information(this, QString::fromUtf8(u8"批量卸载完成"),
-        QString::fromUtf8(u8"成功卸载 %1 / %2 个程序。").arg(ok).arg(toUninstall.size()));
+    QString msg = QString::fromUtf8(u8"成功卸载 %1 / %2 个程序。").arg(ok).arg(toUninstall.size());
+    if (canceled > 0) {
+        msg += QString::fromUtf8(u8"\n已取消 %1 个（UAC 提权被拒或向导取消，未做更改）。").arg(canceled);
+    }
+    if (failed > 0) {
+        msg += QString::fromUtf8(u8"\n失败 %1 个。").arg(failed);
+    }
+    QMessageBox::information(this, QString::fromUtf8(u8"批量卸载完成"), msg);
 
     // ② 统一重扫（强制重扫，确保已卸载条目立即从列表消失）
     built_list(false);

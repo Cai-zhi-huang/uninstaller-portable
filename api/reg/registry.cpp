@@ -321,9 +321,9 @@ static bool waitForProcess(HANDLE hProcess, DWORD timeoutMs) {
     }
 }
 
-bool Registry::uninstallSoftware(const SoftwareInfo& software) {
+UninstallResult Registry::uninstallSoftware(const SoftwareInfo& software) {
     if (software.uninstallString.empty()) {
-        return false;
+        return UninstallResult::Failed;
     }
 
     // 统一构建命令行（MSI 走 msiexec /x，普通程序用原始卸载字符串）。
@@ -332,7 +332,7 @@ bool Registry::uninstallSoftware(const SoftwareInfo& software) {
 
     // 解析命令行：拆成 (exe 路径, 参数) 两段，参数段原样保留引号。
     std::wstring appPath, parameters;
-    if (!splitExeAndParams(wCmd, appPath, parameters)) return false;
+    if (!splitExeAndParams(wCmd, appPath, parameters)) return UninstallResult::Failed;
 
     bool elevate = needsElevation(software, appPath);
     std::wstring dir = directoryOf(appPath);
@@ -347,14 +347,20 @@ bool Registry::uninstallSoftware(const SoftwareInfo& software) {
     sei.nShow = SW_NORMAL; // 显示卸载向导，让用户可见可操作
 
     if (!ShellExecuteExW(&sei)) {
-        return false;
+        // 用户取消 UAC 提权（lpVerb=runas 时拒绝授权）会让 ShellExecuteExW 失败，
+        // 且 GetLastError()==ERROR_CANCELLED(1223)。这属于「用户主动取消」而非「卸载失败」，
+        // 若误报失败会误导用户、并令列表无变化却弹出失败提示。故单独返回 Canceled。
+        if (GetLastError() == ERROR_CANCELLED) {
+            return UninstallResult::Canceled;
+        }
+        return UninstallResult::Failed;
     }
 
     // 少数卸载器/启动器在 SEE_MASK_NOCLOSEPROCESS 下也不返回进程句柄（hProcess 为 NULL）。
     // 此时卸载其实已被成功发起，只是无法跟踪其退出码——不应误报“卸载失败”（否则会误导用户、
     // 且列表不会刷新）。直接视为已发起并返回成功。
     if (!sei.hProcess) {
-        return true;
+        return UninstallResult::Success;
     }
 
     // MSI 静默卸载通常很快结束；普通 EXE 卸载向导会一直等待用户操作（用 INFINITE）。
@@ -366,11 +372,19 @@ bool Registry::uninstallSoftware(const SoftwareInfo& software) {
     std::string lowerCmd = getUninstallCommand(software);
     std::transform(lowerCmd.begin(), lowerCmd.end(), lowerCmd.begin(), ::tolower);
     if (lowerCmd.find("msiexec") != std::string::npos) {
-        // MSI 退出码：0=成功，3010/1641=成功但需重启
-        return exitCode == 0 || exitCode == 3010 || exitCode == 1641;
+        // MSI 退出码：0=成功，3010/1641=成功但需重启；1602=用户在向导中取消。
+        if (exitCode == 0 || exitCode == 3010 || exitCode == 1641) {
+            return UninstallResult::Success;
+        }
+        // 1602=ERROR_INSTALL_USEREXIT：用户在 MSI 向导里点取消，属主动放弃，非失败。
+        if (exitCode == 1602) {
+            return UninstallResult::Canceled;
+        }
+        return UninstallResult::Failed;
     }
-    // 普通 EXE 退出码语义各异，进程正常结束即视为已执行
-    return done;
+    // 普通 EXE 退出码语义各异，进程正常结束（用户走完向导或取消向导）即视为已发起。
+    // 仅当等待进程超时/出错（done=false）才判失败——避免把正常的向导取消误报成失败。
+    return done ? UninstallResult::Success : UninstallResult::Failed;
 }
 
 // 判断字符串是否为 GUID 形式，支持 {GUID} 和纯 GUID 两种写法。
