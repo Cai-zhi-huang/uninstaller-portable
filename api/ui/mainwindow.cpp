@@ -2139,7 +2139,9 @@ void UninstallerWindow::copyUninstallCommand() {
     if (tick(row)) return;
 
     auto sw = softwareAtRow(row);
-    QString cmd = QString::fromStdString(sw->uninstallString);
+    // 复制“规范化后可运行”的卸载命令（MSI 会补全为 `msiexec.exe /x {GUID} /quiet /norestart`，
+    // 普通程序用原始字符串），比原始 UninstallString 更便于直接粘贴到命令行/脚本执行。
+    QString cmd = QString::fromStdString(Registry::getUninstallCommand(*sw));
     if (cmd.isEmpty()) {
         cmd = getlang(0x37).toString();
     }
