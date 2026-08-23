@@ -2344,11 +2344,24 @@ void UninstallerWindow::filterSoftware() {
     // setRowHidden() 在排序启用时与排序代理的 visual/logical 行映射交互不可靠，
     // 会表现为隐藏/显示错乱、过滤不生效。因此：搜索词非空时彻底关闭排序；
     // 清空搜索词后再恢复排序。这样隐藏状态在稳定环境下工作。
+    // 恢复排序时保留用户此前设置的排序列/方向（而非强制回到名称升序），
+    // 否则用户搜完清空搜索框后，刚按大小排好的列表会被重置，体验差。
     bool wantSorting = compactTokens.isEmpty();
     if (m_tableWidget->isSortingEnabled() != wantSorting) {
+        int sortCol = -1;
+        Qt::SortOrder sortOrder = Qt::AscendingOrder;
+        if (!wantSorting) {
+            // 即将关闭排序：先记住当前的排序列/方向，供清空搜索时恢复。
+            sortCol = m_tableWidget->horizontalHeader()->sortIndicatorSection();
+            sortOrder = m_tableWidget->horizontalHeader()->sortIndicatorOrder();
+        }
         m_tableWidget->setSortingEnabled(wantSorting);
         if (wantSorting) {
-            m_tableWidget->sortItems(0, Qt::AscendingOrder);
+            if (sortCol >= 0) {
+                m_tableWidget->sortItems(sortCol, sortOrder);
+            } else {
+                m_tableWidget->sortItems(0, Qt::AscendingOrder);
+            }
         }
     }
 
