@@ -1215,6 +1215,16 @@ void UninstallerWindow::uninstallSelected() {
         return;
     }
 
+    // 无卸载命令的条目（多为已判定为残留、卸载程序已不存在的注册表项）：
+    // 继续走卸载只会令 uninstallSoftware 返回 Failed 并误报“卸载失败”。
+    // 这类条目应改用「删除注册表项 / 强制删除此条目」清理，故提前友好拦截并提示。
+    if (software->uninstallString.empty()) {
+        QMessageBox::information(this, QString::fromUtf8(u8"无法卸载"),
+            QString::fromUtf8(u8"「%1」没有可用的卸载命令（卸载程序可能已不存在）。\n"
+                              "若确认要清理该条目，请改用右键菜单的「删除注册表项」或「强制删除此条目」。").arg(QString::fromStdString(software->displayName)));
+        return;
+    }
+
     QString name = QString::fromStdString(software->displayName);
     QString ver = QString::fromStdString(software->displayVersion);
     QString cmd = QString::fromStdString(Registry::getUninstallCommand(*software));
@@ -1445,9 +1455,23 @@ void UninstallerWindow::batchDeleteResiduals() {
         built_list(false);
         loadSoftwareList();
     } else {
+        // 部分文件可能因占用/无权限删除失败：重新汇总仍存在的残留并给出诊断，
+        // 让用户知道“已删哪些、还剩哪些”，而不是只看到一条笼统失败。
+        std::vector<std::string> remain;
+        for (auto sw : selected) {
+            auto r = Registry::scanResidualFiles(*sw, sw->isOrphaned);
+            for (const auto& f : r) remain.push_back(f);
+        }
         QString hint = informat::diagnoseDeleteFailure(allResiduals);
-        QMessageBox::warning(this, getlang(0xFu).toString(),
-            getlang(0x1A).toString() + "\n\n" + hint);
+        QString msg = getlang(0x1A).toString() + "\n\n" + hint;
+        const int deleted = static_cast<int>(allResiduals.size()) - static_cast<int>(remain.size());
+        if (deleted > 0 && !remain.empty()) {
+            msg += QString::fromUtf8(u8"\n\n已删除 %1 个，仍有 %2 个残留未删除（可能被占用或无权限）。")
+                       .arg(deleted).arg(static_cast<int>(remain.size()));
+        } else if (deleted > 0 && remain.empty()) {
+            msg += QString::fromUtf8(u8"\n\n已删除 %1 个残留。").arg(deleted);
+        }
+        QMessageBox::warning(this, getlang(0xFu).toString(), msg);
     }
 }
 
