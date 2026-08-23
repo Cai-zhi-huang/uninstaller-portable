@@ -1577,9 +1577,19 @@ void UninstallerWindow::scanResiduals() {
         }
         else {
             // ④ C 盘被锁定/无权限/文件占用时，给出可操作的友好提示，而非笼统报错。
+            // 删除部分成功（部分文件因占用/无权限失败）时，重新扫描残留反映真实剩余，
+            // 让用户知道“已删哪些、还剩哪些”，而不是只看到一条笼统失败。
+            auto remain = Registry::scanResidualFiles(*software, true);
             QString hint = informat::diagnoseDeleteFailure(residuals);
-            QMessageBox::warning(&dialog, getlang(0xF).toString(),
-                                 getlang(0x1A).toString() + "\n\n" + hint);
+            QString msg = getlang(0x1A).toString() + "\n\n" + hint;
+            const int deleted = static_cast<int>(residuals.size()) - static_cast<int>(remain.size());
+            if (deleted > 0 && !remain.empty()) {
+                msg += QString::fromUtf8(u8"\n\n已删除 %1 个，仍有 %2 个残留未删除（可能被占用或无权限）。")
+                           .arg(deleted).arg(static_cast<int>(remain.size()));
+            } else if (deleted > 0 && remain.empty()) {
+                msg += QString::fromUtf8(u8"\n\n已删除 %1 个残留。").arg(deleted);
+            }
+            QMessageBox::warning(&dialog, getlang(0xF).toString(), msg);
         }
         });
 
@@ -2482,7 +2492,19 @@ void UninstallerWindow::filterSoftware() {
         }
     }
 
-    statusBar()->showMessage(getlang(0x7u).toString().arg(visibleCount).arg(QString::fromStdString(visibleSize.get())));
+    // 状态栏：根据是否有搜索词/残留过滤，给出更明确的可视反馈。
+    // 0 匹配时尤其要提示“是过滤导致全部隐藏”而非“列表空了”，避免误以为扫描失败。
+    QString statusMsg;
+    if (visibleCount == 0 && !compactTokens.isEmpty()) {
+        statusMsg = QString::fromUtf8(u8"未找到与「%1」匹配的项（共 %2 个软件，已全部被过滤隐藏）")
+            .arg(raw).arg(m_softwareList.size());
+    } else if (visibleCount == 0 && m_showOrphanOnly) {
+        statusMsg = QString::fromUtf8(u8"没有残留项（共 %1 个软件）").arg(m_softwareList.size());
+    } else {
+        statusMsg = getlang(0x7u).toString()
+            .arg(visibleCount).arg(QString::fromStdString(visibleSize.get()));
+    }
+    statusBar()->showMessage(statusMsg);
 }
 
 void UninstallerWindow::loadLanguageSetting() {
