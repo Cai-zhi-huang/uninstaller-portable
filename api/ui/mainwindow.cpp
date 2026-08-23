@@ -2296,6 +2296,18 @@ static const QStringList kAliasGroups[] = {
     {QString::fromUtf8(u8"抖音"), QStringLiteral("douyin"), QStringLiteral("tiktok")},
     {QString::fromUtf8(u8"快手"), QStringLiteral("kuaishou"), QStringLiteral("kwai")},
     {QString::fromUtf8(u8"微信输入法"), QStringLiteral("wechatinput")},
+    {QString::fromUtf8(u8"网易云音乐"), QStringLiteral("netease"), QStringLiteral("cloudmusic")},
+    {QString::fromUtf8(u8"腾讯会议"), QStringLiteral("wemeet"), QStringLiteral("tencentmeeting")},
+    {QString::fromUtf8(u8"企业微信"), QStringLiteral("wxwork"), QStringLiteral("wecom")},
+    {QString::fromUtf8(u8"百度网盘"), QStringLiteral("baidunetdisk"), QStringLiteral("baiduyun")},
+    {QString::fromUtf8(u8"QQ音乐"), QStringLiteral("qqmusic"), QStringLiteral("qqyy")},
+    {QString::fromUtf8(u8"飞书"), QStringLiteral("feishu"), QStringLiteral("lark")},
+    {QString::fromUtf8(u8"原神"), QStringLiteral("genshin")},
+    {QString::fromUtf8(u8"米哈游"), QStringLiteral("mihoyo"), QStringLiteral("miHoYo")},
+    {QString::fromUtf8(u8"喜马拉雅"), QStringLiteral("ximalaya")},
+    {QString::fromUtf8(u8"知乎"), QStringLiteral("zhihu")},
+    {QString::fromUtf8(u8"微博"), QStringLiteral("weibo")},
+    {QString::fromUtf8(u8"小红书"), QStringLiteral("xhs"), QStringLiteral("redbook")},
 };
 
 // 返回某个词的“等价词集合”（含自身）：让中文查询命中英文显示名，反之亦然。
