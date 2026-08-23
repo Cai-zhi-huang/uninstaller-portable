@@ -608,8 +608,14 @@ static bool dirContainsUninstaller(const std::wstring& dir) {
 static bool dirContainsExe(const std::wstring& dir) {
     std::error_code ec;
     if (dir.empty() || !fs::exists(dir, ec)) return false;
+    // 文件数上限：超过此值视为“超大目录”，直接返回 false（保守不误判残留）。
+    // 防止 installLocation 指向 node_modules / Anaconda 等数万文件目录时，
+    // 后台 registryInit 逐文件遍历拖慢整个扫描（典型如钉钉、Anaconda）。
+    const int kMaxScan = 5000;
+    int count = 0;
     for (auto it = fs::directory_iterator(dir, ec); it != fs::directory_iterator(); it.increment(ec)) {
         if (ec) break;
+        if (++count > kMaxScan) return false;
         std::error_code ec2;
         if (it->is_regular_file(ec2)) {
             std::wstring ext = it->path().extension().wstring();
