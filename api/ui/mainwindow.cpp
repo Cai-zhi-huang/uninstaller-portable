@@ -1145,7 +1145,11 @@ void UninstallerWindow::loadSoftwareList() {
         }
     }
     m_tableWidget->setRowCount(i);
-    m_tableWidget->resizeColumnsToContents();
+    // 仅首次填充时自动调整列宽（避免每次卸载/删除/刷新重扫都把用户拉宽的列重置回默认）。
+    if (!m_columnsSized) {
+        m_tableWidget->resizeColumnsToContents();
+        m_columnsSized = true;
+    }
     m_tableWidget->setSortingEnabled(true);
     // 保留用户此前设置的排序列/方向：重扫（卸载/删除/刷新）后不再强制回到
     // “名称升序”，否则用户刚按大小排好的列表会被重置，体验差。

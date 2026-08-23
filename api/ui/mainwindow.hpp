@@ -73,6 +73,7 @@ private:
     bool m_busy{ false };   // 防止卸载/扫描过程中重复触发
     bool m_showSystemComponents{ false }; // 默认隐藏系统组件，减少 VC++ 运行库等视觉噪音
     bool m_showOrphanOnly{ false };        // 仅显示残留项
+    bool m_columnsSized{ false };           // 列宽是否已自动调整过（仅首次 loadSoftwareList 调整，避免重扫重置用户列宽）
     int m_theme{ 0 };                       // 0: 亮色, 1: 暗色
     QMenu* actionMenu{ nullptr };
     QMenu* m_selfMenu{ nullptr };          //“本程序”菜单
