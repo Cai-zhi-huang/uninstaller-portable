@@ -1182,9 +1182,14 @@ bool UninstallerWindow::tick(const ll& row) {
 }
 
 // 执行单个卸载（不含确认/预览），单条与批量共用。返回是否成功。
-UninstallResult UninstallerWindow::doUninstall(SoftwareInfo* software) {
+UninstallResult UninstallerWindow::doUninstall(SoftwareInfo* software, bool showProgress) {
     if (!software) return UninstallResult::Failed;
     QString name = QString::fromStdString(software->displayName);
+    // showProgress=false 时（批量卸载）不弹独立进度框，由调用方的总进度条统一反馈，
+    // 避免每卸载一项就闪一个对话框、体验割裂。
+    if (!showProgress) {
+        return Registry::uninstallSoftware(*software);
+    }
     QProgressDialog progress(getlang(0xCu).toString().arg(name),
         getlang(0x3u).toString(), 0, 0, this);
     progress.setWindowModality(Qt::WindowModal);
@@ -1309,12 +1314,25 @@ void UninstallerWindow::batchUninstall() {
     if (m_busy) return;
     m_busy = true;
     int ok = 0, canceled = 0, failed = 0;
-    for (auto sw : toUninstall) {
-        UninstallResult r = doUninstall(sw);
+    // 单一总进度条：逐条目推进，避免每个卸载项都弹独立对话框、体验割裂。
+    QProgressDialog master(QString::fromUtf8(u8"正在批量卸载…"), getlang(0x3u).toString(),
+        0, static_cast<int>(toUninstall.size()), this);
+    master.setWindowModality(Qt::WindowModal);
+    master.setMinimumDuration(0);
+    master.show();
+    for (int i = 0; i < toUninstall.size(); ++i) {
+        master.setValue(i);
+        master.setLabelText(QString::fromUtf8(u8"正在卸载：%1 (%2/%3)")
+            .arg(QString::fromStdString(toUninstall[i]->displayName))
+            .arg(i + 1).arg(toUninstall.size()));
+        QApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
+        UninstallResult r = doUninstall(toUninstall[i], /*showProgress=*/false);
         if (r == UninstallResult::Success) ++ok;
         else if (r == UninstallResult::Canceled) ++canceled;
         else ++failed;
     }
+    master.setValue(static_cast<int>(toUninstall.size()));
+    master.close();
     m_busy = false;
 
     QString msg = QString::fromUtf8(u8"成功卸载 %1 / %2 个程序。").arg(ok).arg(toUninstall.size());
