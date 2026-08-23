@@ -586,6 +586,13 @@ static std::string mainExeFromDisplayIcon(const std::string& displayIcon) {
 static bool dirContainsUninstaller(const std::wstring& dir) {
     std::error_code ec;
     if (dir.empty() || !fs::exists(dir, ec)) return false;
+    // 网络盘/可移动盘/U盘/CD 等非固定盘可能极慢甚至无响应，残留判定场景下直接跳过，
+    // 避免后台扫描在这些路径上阻塞、拖垮整个列表加载（宁可少报，不可卡死 UI）。
+    if (dir.size() >= 2 && dir[1] == L':') {
+        if (GetDriveTypeW(dir.substr(0, 2).c_str()) != DRIVE_FIXED) return false;
+    } else if (dir.rfind(L"\\\\", 0) == 0) {
+        return false; // UNC 网络路径
+    }
     for (auto it = fs::directory_iterator(dir, ec); it != fs::directory_iterator(); it.increment(ec)) {
         if (ec) break;
         std::error_code ec2;
@@ -608,6 +615,13 @@ static bool dirContainsUninstaller(const std::wstring& dir) {
 static bool dirContainsExe(const std::wstring& dir) {
     std::error_code ec;
     if (dir.empty() || !fs::exists(dir, ec)) return false;
+    // 网络盘/可移动盘/U盘/CD 等非固定盘可能极慢甚至无响应，残留判定场景下直接跳过，
+    // 避免后台扫描在这些路径上阻塞、拖垮整个列表加载（宁可少报，不可卡死 UI）。
+    if (dir.size() >= 2 && dir[1] == L':') {
+        if (GetDriveTypeW(dir.substr(0, 2).c_str()) != DRIVE_FIXED) return false;
+    } else if (dir.rfind(L"\\\\", 0) == 0) {
+        return false; // UNC 网络路径
+    }
     // 文件数上限：超过此值视为“超大目录”，直接返回 false（保守不误判残留）。
     // 防止 installLocation 指向 node_modules / Anaconda 等数万文件目录时，
     // 后台 registryInit 逐文件遍历拖慢整个扫描（典型如钉钉、Anaconda）。
