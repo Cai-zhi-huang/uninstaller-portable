@@ -920,6 +920,81 @@ static std::vector<std::string> collectProcessKeys(const std::string& displayNam
         if (lowerName.find("腾讯") != std::string::npos) {
             addKey("Tencent");
         }
+        if (lowerName.find("企业微信") != std::string::npos) {
+            addKey("WXWork");
+            addKey("WeCom");
+        }
+        if (lowerName.find("腾讯会议") != std::string::npos) {
+            addKey("wemeet");
+            addKey("WemeetApp");
+        }
+        if (lowerName.find("网易") != std::string::npos) {
+            addKey("netease");
+            addKey("网易云音乐");
+        }
+        if (lowerName.find("网易云音乐") != std::string::npos) {
+            addKey("cloudmusic");
+        }
+        if (lowerName.find("百度") != std::string::npos) {
+            addKey("baidu");
+        }
+        if (lowerName.find("百度网盘") != std::string::npos) {
+            addKey("baidunetdisk");
+            addKey("BaiduNetdisk");
+        }
+        if (lowerName.find("支付宝") != std::string::npos) {
+            addKey("alipay");
+        }
+        if (lowerName.find("淘宝") != std::string::npos) {
+            addKey("taobao");
+        }
+        if (lowerName.find("京东") != std::string::npos) {
+            addKey("jd");
+        }
+        if (lowerName.find("美团") != std::string::npos) {
+            addKey("meituan");
+        }
+        if (lowerName.find("快手") != std::string::npos) {
+            addKey("kuaishou");
+        }
+        if (lowerName.find("抖音") != std::string::npos) {
+            addKey("douyin");
+            addKey("tiktok");
+        }
+        if (lowerName.find("飞书") != std::string::npos) {
+            addKey("feishu");
+            addKey("lark");
+        }
+        if (lowerName.find("哔哩") != std::string::npos || lowerName.find("b站") != std::string::npos) {
+            addKey("bilibili");
+        }
+        if (lowerName.find("搜狗") != std::string::npos) {
+            addKey("sogou");
+        }
+        if (lowerName.find("酷狗") != std::string::npos) {
+            addKey("kugou");
+        }
+        if (lowerName.find("迅雷") != std::string::npos) {
+            addKey("thunder");
+            addKey("xunlei");
+        }
+        if (lowerName.find("米哈游") != std::string::npos || lowerName.find("原神") != std::string::npos) {
+            addKey("genshin");
+            addKey("mihoyo");
+        }
+        if (lowerName.find("小红书") != std::string::npos) {
+            addKey("xhs");
+            addKey("redbook");
+        }
+        if (lowerName.find("喜马拉雅") != std::string::npos) {
+            addKey("ximalaya");
+        }
+        if (lowerName.find("知乎") != std::string::npos) {
+            addKey("zhihu");
+        }
+        if (lowerName.find("微博") != std::string::npos) {
+            addKey("weibo");
+        }
 
         std::string word;
         for (char c : displayName) {
