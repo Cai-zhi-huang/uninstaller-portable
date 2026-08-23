@@ -2145,7 +2145,7 @@ void UninstallerWindow::exportSoftwareList() {
                "th,td{border:1px solid #ccc;padding:4px 8px;text-align:left}"
                "th{background:#f0f0f0}tr:nth-child(even){background:#fafafa}</style></head><body>"
                "<h2>已安装软件清单</h2><table><thead><tr>"
-               "<th>名称</th><th>版本</th><th>发行商</th><th>安装日期</th><th>大小</th><th>安装位置</th><th>状态</th>"
+               "<th>名称</th><th>版本</th><th>发行商</th><th>安装日期</th><th>大小</th><th>安装位置</th><th>状态</th><th>卸载命令</th>"
                "</tr></thead><tbody>\n";
         for (const auto& r : rows) {
             // 仅用 toHtmlEscaped() 做转义；不要再手工替换 & < >，否则会与
@@ -2153,7 +2153,8 @@ void UninstallerWindow::exportSoftwareList() {
             auto esc = [](const QString& s) { return s.toHtmlEscaped(); };
             out << "<tr><td>" << esc(r.name) << "</td><td>" << esc(r.ver) << "</td><td>"
                 << esc(r.pub) << "</td><td>" << esc(r.date) << "</td><td>" << esc(r.size)
-                << "</td><td>" << esc(r.loc) << "</td><td>" << esc(r.status) << "</td></tr>\n";
+                << "</td><td>" << esc(r.loc) << "</td><td>" << esc(r.status) << "</td><td>"
+                << esc(r.cmd) << "</td></tr>\n";
         }
         out << "</tbody></table></body></html>";
     } else if (lower.endsWith(".csv")) {
@@ -2168,19 +2169,19 @@ void UninstallerWindow::exportSoftwareList() {
             }
             return cell;
         };
-        out << "Name,Version,Publisher,InstallDate,Size,Location,Status\n";
+        out << "Name,Version,Publisher,InstallDate,Size,Location,Status,UninstallCommand\n";
         for (const auto& r : rows) {
             out << csvCell(r.name) << "," << csvCell(r.ver) << "," << csvCell(r.pub) << ","
                 << csvCell(r.date) << "," << csvCell(r.size) << "," << csvCell(r.loc) << ","
-                << csvCell(r.status) << "\n";
+                << csvCell(r.status) << "," << csvCell(r.cmd) << "\n";
         }
     } else {
         // 文本/TSV 也写 UTF-8 BOM，避免 Excel 打开中文乱码。
         out.setGenerateByteOrderMark(true);
-        out << "Name\tVersion\tPublisher\tInstallDate\tSize\tLocation\tStatus\n";
+        out << "Name\tVersion\tPublisher\tInstallDate\tSize\tLocation\tStatus\tUninstallCommand\n";
         for (const auto& r : rows) {
             out << r.name << "\t" << r.ver << "\t" << r.pub << "\t" << r.date << "\t"
-                << r.size << "\t" << r.loc << "\t" << r.status << "\n";
+                << r.size << "\t" << r.loc << "\t" << r.status << "\t" << r.cmd << "\n";
         }
     }
     file.close();
