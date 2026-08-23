@@ -1765,8 +1765,10 @@ QString UninstallerWindow::loadChangelogLatest() {
 }
 
 // 用户勾选“不再提示此版本”后，该版本不再弹出（基于 QSettings 持久化到注册表）。
+// 必须用与全局一致的 QSettings("Uninstaller","uninstaller")：默认构造的 QSettings
+// 组织名为空，写入位置与 loadLanguageSetting 等不一致，“不再提示”会失效（仍弹）。
 void UninstallerWindow::showUpdatePopup() {
-    QSettings settings;
+    QSettings settings(QStringLiteral("Uninstaller"), QStringLiteral("uninstaller"));
     const QString dontShowKey = QStringLiteral("updatePopup/lastShown");
     QString last = settings.value(dontShowKey).toString();
     // 若当前版本已被用户选择“不再提示”，则不弹。
