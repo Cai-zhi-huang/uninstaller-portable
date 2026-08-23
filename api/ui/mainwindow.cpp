@@ -1718,6 +1718,48 @@ void UninstallerWindow::showAbout() {
 }
 
 // 启动时的更新日志弹窗：一打开主界面就展示当前版本的更新内容。
+// 从 CHANGELOG.md 解析“最新版本”段落（第一个 `## ` 标题下、到下一个 `## `/
+// `---`/文件尾之间的内容），去掉 Markdown 引用与标题符号后返回纯文本。
+// 文件缺失或解析失败时回退到内置文案，保证弹窗永远有内容可显示。
+QString UninstallerWindow::loadChangelogLatest() {
+    const QString fallback = QString::fromUtf8(
+        u8"• ① 新增「运行中」分组：真实检测软件进程状态\n"
+        u8"• ② 列表与体积扫描改为多核并行（QtConcurrent），扫描更快不卡顿\n"
+        u8"• ③ 修复单字母搜索在排序模式下失效的问题\n"
+        u8"• ④ 修复中文软件（如微信）被误判为残留\n"
+        u8"• ⑤ 修复带空格路径「打开文件位置」打不开\n"
+        u8"• ⑥ 安装位置自动校正（如 WeChat→Weixin 等过时路径）\n"
+        u8"• ⑦ 系统组件默认隐藏，可在视图菜单切换显示\n"
+        u8"• ⑧ 关闭窗口彻底退出，不再残留进程");
+
+    QFile f(QCoreApplication::applicationDirPath() + QStringLiteral("/CHANGELOG.md"));
+    if (!f.open(QIODevice::ReadOnly | QIODevice::Text)) return fallback;
+    const QStringList lines = QString::fromUtf8(f.readAll()).split(QChar('\n'), Qt::KeepEmptyParts);
+
+    // 定位第一个 `## ` 标题行（最新版本段起点）
+    int start = -1;
+    for (int i = 0; i < lines.size(); ++i) {
+        if (lines[i].startsWith(QStringLiteral("## "))) { start = i; break; }
+    }
+    if (start < 0) return fallback;
+
+    QString out;
+    for (int i = start + 1; i < lines.size(); ++i) {
+        const QString raw = lines[i];
+        // 遇到下一个版本标题或分隔线即停止
+        if (raw.startsWith(QStringLiteral("## ")) || raw.startsWith(QStringLiteral("---"))) break;
+        QString s = raw.trimmed();
+        if (s.isEmpty()) { if (!out.isEmpty()) out += QChar('\n'); continue; }
+        // 去掉 Markdown 引用前缀与标题符号，保留可读文本
+        if (s.startsWith(QLatin1Char('>'))) s = s.mid(1).trimmed();
+        if (s.startsWith(QStringLiteral("### "))) s = s.mid(4).trimmed();
+        if (s.startsWith(QLatin1Char('#'))) s = s.mid(1).trimmed();
+        out += s + QChar('\n');
+    }
+    out = out.trimmed();
+    return out.isEmpty() ? fallback : out;
+}
+
 // 用户勾选“不再提示此版本”后，该版本不再弹出（基于 QSettings 持久化到注册表）。
 void UninstallerWindow::showUpdatePopup() {
     QSettings settings;
@@ -1753,16 +1795,7 @@ void UninstallerWindow::showUpdatePopup() {
 
     QTextEdit* te = new QTextEdit(&dlg);
     te->setReadOnly(true);
-    te->setPlainText(QString::fromUtf8(
-        u8"• ① 新增「运行中」分组：真实检测软件进程状态\n"
-        u8"• ② 列表与体积扫描改为多核并行（QtConcurrent），扫描更快不卡顿\n"
-        u8"• ③ 修复单字母搜索在排序模式下失效的问题\n"
-        u8"• ④ 修复中文软件（如微信）被误判为残留\n"
-        u8"• ⑤ 修复带空格路径「打开文件位置」打不开\n"
-        u8"• ⑥ 安装位置自动校正（如 WeChat→Weixin 等过时路径）\n"
-        u8"• ⑦ 系统组件默认隐藏，可在视图菜单切换显示\n"
-        u8"• ⑧ 关闭窗口彻底退出，不再残留进程"
-    ));
+    te->setPlainText(loadChangelogLatest());
     te->setFixedHeight(230);
     layout->addWidget(te);
 

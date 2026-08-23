@@ -62,6 +62,7 @@ private:
     void onTableContextMenu(const QPoint& pos); // 表格右键菜单
     void showDetailDialog(int row);             // 软件详情对话框（列出信息 + 功能按钮）
     void showUpdatePopup();                     // 启动时的更新日志弹窗（一打开主界面即弹出）
+    QString loadChangelogLatest();               // 从 CHANGELOG.md 解析最新版本段（回退内置文案）
     void closeEvent(QCloseEvent* event) override; // 关闭前台即关闭整个程序（含后台），不缩托盘
     bool isCriticalSystemItem(const SoftwareInfo* sw) const; // 系统关键项（更新/驱动/系统组件）拦截
     bool doUninstall(SoftwareInfo* software);      // 执行单个卸载（不含确认/预览），单条与批量共用
