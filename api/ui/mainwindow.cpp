@@ -2111,7 +2111,7 @@ void UninstallerWindow::exportSoftwareList() {
     if (fileName.isEmpty()) return;
 
     // 收集当前可见行数据
-    struct Row { QString name, ver, pub, date, size, loc, status; };
+    struct Row { QString name, ver, pub, date, size, loc, status, cmd; };
     QVector<Row> rows;
     for (int i = 0; i < m_tableWidget->rowCount(); ++i) {
         if (m_tableWidget->isRowHidden(i)) continue;
@@ -2125,7 +2125,8 @@ void UninstallerWindow::exportSoftwareList() {
                       QString::fromStdString(sw->installLocation),
                       sw->isOrphaned ? QString::fromUtf8(u8"残留")
                                      : (sw->isRunningTime ? QString::fromUtf8(u8"运行中")
-                                                          : QString::fromUtf8(u8"正常")) });
+                                                          : QString::fromUtf8(u8"正常")),
+                      QString::fromStdString(Registry::getUninstallCommand(*sw)) });
     }
 
     QString lower = fileName.toLower();
