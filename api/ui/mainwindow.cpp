@@ -2130,12 +2130,15 @@ void UninstallerWindow::toggleShowSystemComponents() {
 }
 
 void UninstallerWindow::exportSoftwareList() {
+    QSettings exp(QStringLiteral("Uninstaller"), QStringLiteral("uninstaller"));
+    QString lastDir = exp.value(QStringLiteral("lastExportDir"), QCoreApplication::applicationDirPath()).toString();
     QString fileName = QFileDialog::getSaveFileName(
         this,
         getlang(0x2E).toString(),
-        "software_list.csv",
+        lastDir + QStringLiteral("/software_list.csv"),
         QString::fromUtf8(u8"CSV 文件 (*.csv);;HTML 文件 (*.html);;文本文件 (*.txt);;所有文件 (*)"));
     if (fileName.isEmpty()) return;
+    exp.setValue(QStringLiteral("lastExportDir"), QFileInfo(fileName).absolutePath());
 
     // 收集当前可见行数据
     struct Row { QString name, ver, pub, date, size, loc, status, cmd; };
