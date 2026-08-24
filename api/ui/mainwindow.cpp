@@ -2759,6 +2759,22 @@ void UninstallerWindow::setupUI() {
     actionMenu->addAction(getlang(0x1f).toString(), this, &UninstallerWindow::uninstallSelected);
     actionMenu->addAction(getlang(0x20).toString(), this, &UninstallerWindow::scanResiduals);
     actionMenu->addAction(getlang(0x21).toString(), this, &UninstallerWindow::showDetails);
+    actionMenu->addSeparator();
+    // 选择辅助：仅作用于当前可见（未被过滤隐藏）的行
+    actionMenu->addAction(QString::fromUtf8(u8"全选"), this, [this]() {
+        for (int r = 0; r < m_tableWidget->rowCount(); ++r)
+            if (!m_tableWidget->isRowHidden(r)) m_tableWidget->selectRow(r);
+    });
+    actionMenu->addAction(QString::fromUtf8(u8"反选"), this, [this]() {
+        for (int r = 0; r < m_tableWidget->rowCount(); ++r) {
+            if (m_tableWidget->isRowHidden(r)) continue;
+            QTableWidgetItem* it = m_tableWidget->item(r, 0);
+            if (it) it->setSelected(!it->isSelected());
+        }
+    });
+    actionMenu->addAction(QString::fromUtf8(u8"清除选择"), this, [this]() {
+        m_tableWidget->clearSelection();
+    });
 
     // “本程序”菜单：提供卸载自身的能力（区别于卸载列表中的其他软件）。
     m_selfMenu = bar->addMenu(getlang(0x3E).toString());
