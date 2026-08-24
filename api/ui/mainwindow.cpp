@@ -2860,6 +2860,17 @@ void UninstallerWindow::setupUI() {
         loadSoftwareList();
     });
 
+    // Esc 清空搜索框（仅当搜索框聚焦时触发，避免与对话框 Esc 冲突）
+    QShortcut* escShortcut = new QShortcut(QKeySequence("Esc"), m_searchEdit);
+    connect(escShortcut, &QShortcut::activated, m_searchEdit, &QLineEdit::clear);
+
+    // Ctrl+A 在表格聚焦时全选可见行（限定表格 Context，不干扰搜索框内 Ctrl+A 选词）
+    QShortcut* selectAllShortcut = new QShortcut(QKeySequence("Ctrl+A"), m_tableWidget);
+    connect(selectAllShortcut, &QShortcut::activated, this, [this]() {
+        for (int r = 0; r < m_tableWidget->rowCount(); ++r)
+            if (!m_tableWidget->isRowHidden(r)) m_tableWidget->selectRow(r);
+    });
+
     m_refreshBtn = new QPushButton(getlang(0x23).toString(), this);
     m_refreshBtn->setObjectName("refreshBtn");
     connect(m_refreshBtn, &QPushButton::clicked, this, [this]() {
