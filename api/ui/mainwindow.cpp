@@ -778,10 +778,19 @@ void UninstallerWindow::run() {
     // 设置窗口标题栏与任务栏图标（exe 内嵌的 IDI_APP_ICON）
     setWindowIcon(QApplication::windowIcon());
     loadLanguageSetting();   // 启动前恢复上次选择的语言，setupUI 才会用正确的语言建界面
-    // ⑨ 恢复持久化的主题
+    // ⑨ 恢复持久化的主题；首次启动则跟随系统明暗主题
     {
-        QSettings st("Uninstaller", "uninstaller");
-        m_theme = st.value("theme", 0).toInt();
+        QSettings st(QStringLiteral("Uninstaller"), QStringLiteral("uninstaller"));
+        if (st.contains(QStringLiteral("theme"))) {
+            m_theme = st.value(QStringLiteral("theme"), 0).toInt();
+        } else {
+            // 首次启动：读取 Windows 个性化设置（AppsUseLightTheme=0 为深色）
+            QSettings sys(QStringLiteral("HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize"),
+                          QSettings::NativeFormat);
+            bool light = sys.value(QStringLiteral("AppsUseLightTheme"), 1).toInt() != 0;
+            m_theme = light ? 0 : 1;
+            st.setValue(QStringLiteral("theme"), m_theme);  // 记录一次，后续以用户手动切换为准
+        }
         setTheme(m_theme);
     }
     setupUI();
