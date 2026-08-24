@@ -787,6 +787,15 @@ void UninstallerWindow::run() {
     setupUI();
     built_list(/*allowCache=*/true);   // 启动：命中1小时内缓存则跳过扫描与进度条
     loadSoftwareList();
+    // ⑩ 恢复上次保存的窗口几何与列表列宽（首次启动无记录则用默认）
+    {
+        QSettings geo(QStringLiteral("Uninstaller"), QStringLiteral("uninstaller"));
+        restoreGeometry(geo.value(QStringLiteral("windowGeometry")).toByteArray());
+        if (m_tableWidget && m_tableWidget->horizontalHeader()) {
+            const QByteArray hs = geo.value(QStringLiteral("tableHeaderState")).toByteArray();
+            if (!hs.isEmpty()) m_tableWidget->horizontalHeader()->restoreState(hs);
+        }
+    }
     show();
     showUpdatePopup();   // 启动即弹出更新日志
 }
@@ -942,6 +951,15 @@ void UninstallerWindow::closeEvent(QCloseEvent* event) {
             m_iconThread->wait(200);
         }
         m_iconThread = nullptr;
+    }
+
+    // 退出前持久化窗口几何与列宽（供下次启动恢复）
+    {
+        QSettings geo(QStringLiteral("Uninstaller"), QStringLiteral("uninstaller"));
+        geo.setValue(QStringLiteral("windowGeometry"), saveGeometry());
+        if (m_tableWidget && m_tableWidget->horizontalHeader()) {
+            geo.setValue(QStringLiteral("tableHeaderState"), m_tableWidget->horizontalHeader()->saveState());
+        }
     }
 
     // 立即结束整个进程：即使后台线程/WinAPI 仍阻塞，也不给任何残留机会。
