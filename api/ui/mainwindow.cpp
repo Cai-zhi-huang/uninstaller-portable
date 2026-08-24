@@ -2560,6 +2560,20 @@ void UninstallerWindow::filterSoftware() {
         statusMsg = getlang(0x7u).toString()
             .arg(visibleCount).arg(QString::fromStdString(visibleSize.get()));
     }
+    // 追加选中信息（若有选中）：方便批量卸载/删残留前确认范围
+    int selCount = 0;
+    filesize_t selSize;
+    if (QItemSelectionModel* sel = m_tableWidget->selectionModel()) {
+        for (const QModelIndex& idx : sel->selectedRows()) {
+            ++selCount;
+            auto sw = softwareAtRow(idx.row());
+            if (sw) selSize += sw->size.size;
+        }
+    }
+    if (selCount > 0) {
+        statusMsg += QString::fromUtf8(u8"　已选 %1 个，共 %2")
+            .arg(selCount).arg(QString::fromStdString(selSize.get()));
+    }
     statusBar()->showMessage(statusMsg);
 }
 
@@ -2901,6 +2915,30 @@ void UninstallerWindow::setupUI() {
 
     // 双击行打开详情对话框（与右键「详情」一致），符合常见列表操作直觉
     connect(m_tableWidget, &QTableWidget::doubleClicked, this, &UninstallerWindow::showDetails);
+
+    // 选择变化即刷新状态栏的「已选 N 个，共 X」提示（不含重新过滤）
+    connect(m_tableWidget->selectionModel(), &QItemSelectionModel::selectionChanged, this, [this]() {
+        int visible = 0; filesize_t vis;
+        int sel = 0; filesize_t selSize;
+        for (int r = 0; r < m_tableWidget->rowCount(); ++r) {
+            auto sw = softwareAtRow(r);
+            if (!m_tableWidget->isRowHidden(r)) {
+                ++visible;
+                if (sw) vis += sw->size.size;
+            }
+            QTableWidgetItem* it = m_tableWidget->item(r, 0);
+            if (it && it->isSelected()) {
+                ++sel;
+                if (sw) selSize += sw->size.size;
+            }
+        }
+        QString msg = getlang(0x7u).toString().arg(visible).arg(QString::fromStdString(vis.get()));
+        if (sel > 0) {
+            msg += QString::fromUtf8(u8"　已选 %1 个，共 %2")
+                .arg(sel).arg(QString::fromStdString(selSize.get()));
+        }
+        statusBar()->showMessage(msg);
+    });
 
     mainLayout->addWidget(m_tableWidget);
 
