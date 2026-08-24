@@ -2880,6 +2880,9 @@ void UninstallerWindow::setupUI() {
     // 用事件过滤器直接在 viewport 上拦截右键，比 contextMenuPolicy 更可靠。
     m_tableWidget->viewport()->installEventFilter(this);
 
+    // 双击行打开详情对话框（与右键「详情」一致），符合常见列表操作直觉
+    connect(m_tableWidget, &QTableWidget::doubleClicked, this, &UninstallerWindow::showDetails);
+
     mainLayout->addWidget(m_tableWidget);
 
     // 按钮栏
