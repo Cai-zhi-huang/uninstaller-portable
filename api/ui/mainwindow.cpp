@@ -2799,6 +2799,7 @@ void UninstallerWindow::setupUI() {
 
     m_searchEdit = new QLineEdit(this);
     m_searchEdit->setPlaceholderText(getlang(0x22).toString());
+    m_searchEdit->setClearButtonEnabled(true);  // 右侧显示清除(×)按钮，一键清空搜索
     m_searchEdit->setMinimumWidth(220);
     m_searchEdit->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
     connect(m_searchEdit, &QLineEdit::textChanged, this, &UninstallerWindow::filterSoftware);
