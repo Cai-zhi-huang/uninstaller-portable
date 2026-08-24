@@ -2810,6 +2810,13 @@ void UninstallerWindow::setupUI() {
         m_searchEdit->selectAll();
     });
 
+    // F5 强制重新扫描注册表（与刷新按钮一致，反映新装/卸载的软件）
+    QShortcut* refreshShortcut = new QShortcut(QKeySequence("F5"), this);
+    connect(refreshShortcut, &QShortcut::activated, this, [this]() {
+        built_list(false);
+        loadSoftwareList();
+    });
+
     m_refreshBtn = new QPushButton(getlang(0x23).toString(), this);
     m_refreshBtn->setObjectName("refreshBtn");
     connect(m_refreshBtn, &QPushButton::clicked, this, [this]() {
