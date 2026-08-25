@@ -10,6 +10,26 @@
 #include <shlobj.h>
 #include <string>
 
+// 返回 System32 下指定系统二进制的完整路径，避免仅用文件名时应用目录被写入恶意同名文件而被种植执行（F4）。
+static std::wstring System32Binary(const wchar_t* name) {
+    wchar_t sys[MAX_PATH] = {0};
+    UINT n = GetSystemDirectoryW(sys, MAX_PATH);
+    std::wstring dir = (n && n < MAX_PATH) ? std::wstring(sys) : std::wstring(L"C:\\Windows\\System32");
+    if (!dir.empty() && dir.back() != L'\\') dir += L'\\';
+    return dir + name;
+}
+
+// PowerShell 单引号字符串中，单引号用两个单引号转义；用于安全地拼入 -LiteralPath（F1）。
+static std::wstring EscapePsSingleQuotes(const std::wstring& in) {
+    std::wstring out = in;
+    size_t pos = 0;
+    while ((pos = out.find(L"'", pos)) != std::wstring::npos) {
+        out.replace(pos, 1, L"''");
+        pos += 2;
+    }
+    return out;
+}
+
 static std::wstring SelfDir() {
     wchar_t mod[MAX_PATH * 2];
     GetModuleFileNameW(nullptr, mod, (DWORD)_countof(mod));
@@ -36,7 +56,7 @@ static void KillApp() {
     // 用 SEE_MASK_NOCLOSEPROCESS + WaitForSingleObject 同步等待结束，确保后续删除目录时它已退出。
     SHELLEXECUTEINFOW sei = { sizeof(sei) };
     sei.fMask = SEE_MASK_NOCLOSEPROCESS;
-    sei.lpFile = L"taskkill.exe";
+    sei.lpFile = System32Binary(L"taskkill.exe").c_str();
     sei.lpParameters = L"/F /IM uninstaller.exe";
     sei.nShow = SW_HIDE;
     if (ShellExecuteExW(&sei) && sei.hProcess) {
@@ -63,10 +83,14 @@ static void DoUninstall(const std::wstring& dir) {
     RemoveReg();
     // 延迟删除安装目录：等待本进程退出后由 PowerShell 执行，避免“删除正在运行的自己”自锁
     DWORD pid = GetCurrentProcessId();
+    // 先把安装目录中的单引号转义，再拼进 PowerShell 单引号字符串，杜绝命令注入（F1）。
+    std::wstring safeDir = EscapePsSingleQuotes(dir);
     std::wstring psCmd = L"Wait-Process -Id " + std::to_wstring(pid) +
-        L"; Remove-Item -LiteralPath '" + dir + L"' -Recurse -Force";
+        L"; Remove-Item -LiteralPath '" + safeDir + L"' -Recurse -Force";
     std::wstring params = L"-NoProfile -WindowStyle Hidden -Command \"" + psCmd + L"\"";
-    ShellExecuteW(nullptr, L"open", L"powershell.exe", params.c_str(), nullptr, SW_HIDE);
+    // 用 System32 下的完整 powershell.exe 路径，避免应用目录被种植同名二进制（F4）。
+    std::wstring psPath = System32Binary(L"WindowsPowerShell\\v1.0\\powershell.exe");
+    ShellExecuteW(nullptr, L"open", psPath.c_str(), params.c_str(), nullptr, SW_HIDE);
     MessageBoxW(nullptr, L"已卸载「卸载管理器」。", L"卸载完成", MB_ICONINFORMATION);
 }
 

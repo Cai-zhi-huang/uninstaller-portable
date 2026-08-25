@@ -10,8 +10,20 @@
 #include <QDateTime>
 #include <QCoreApplication>
 
+#ifdef _WIN32
+#include <windows.h>
+#endif
+
 int main(int argc, char *argv[])
 {
+#ifdef _WIN32
+    // 安全加固（F6）：从 DLL 搜索顺序中移除“当前工作目录”，并启用安全搜索模式，
+    // 防止 exe 同级/可写目录被植入同名恶意 DLL（如 Qt6Core.dll）时被加载执行（DLL 种植劫持）。
+    // 配合 app.manifest 的 asInvoker 与按需 runas，把“放一个 DLL 就接管进程”的攻击面降到最低。
+    ::SetDllDirectoryW(L"");
+    ::SetSearchPathMode(BASE_SEARCH_PATH_ENABLE_SAFE_SEARCHMODE);
+#endif
+
 	QApplication app(argc, argv);
 	// 关闭最后一个窗口即退出整个程序（含后台），不残留进程
 	app.setQuitOnLastWindowClosed(true);

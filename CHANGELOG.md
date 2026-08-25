@@ -4,6 +4,27 @@
 
 ---
 
+## v0.0.3 (试用版) — 安全加固（F1–F10）
+
+> 全面安全审计与加固，防御「命令注入 / 路径绕过 / DLL 种植劫持 / 缓存投毒 / 意外提权」等攻击面。完整过程见 `tools/security_audit_report.md`（本地，未入库）。
+
+### 命令注入与路径绕过
+- **F1 PowerShell 命令注入**：自卸载桩对 `InstallLocation` 单引号转义（`''`），`powershell.exe` 改用 `System32\WindowsPowerShell\v1.0\` 完整路径。
+- **F2 reg.exe 参数注入**：提权删注册表前校验键名不含 `"`，含则拒绝；`reg.exe` 改用 `System32` 完整路径。
+- **F3 8.3 短名绕过**：`isProtectedPath` 比较前用 `GetLongPathNameW` 还原 `PROGRA~1` 等长名，防止误删 Program Files 目录。
+- **F4 裸系统二进制名**：`reg.exe`/`powershell.exe`/`taskkill.exe`/`explorer.exe`/`regedit.exe`/`msiexec.exe` 全部改用 `GetSystemDirectoryW` 完整路径，杜绝 DLL/二进制种植。
+- **F5 UI 线程阻塞**：提权删 `reg.exe` 等待改为 `MsgWaitForMultipleObjects` + 消息泵，UAC 期间不再假死。
+
+### 篡改与提权防御
+- **F6 DLL 种植劫持**：`main()` 入口调用 `SetDllDirectoryW(L"")` + `SetSearchPathMode`，从 DLL 搜索顺序移除当前目录、启用安全搜索模式。
+- **F8 缓存投毒**：`uninstaller_cache.json` 增加 Sha256+盐 完整性校验，被清空/篡改即丢弃并回退实时扫描，恶意软件无法借缓存“消失”。
+- **F10 / F10b UAC 清单缺失**：新增 `app.manifest`（主程序）与 `installer.manifest`（安装器），显式声明 `asInvoker / uiAccess=false`，修复因 exe 名含 "uninstall"/"Setup" 触发 Windows 安装程序检测自动提权的问题。
+
+### 发布前必做（F7）
+- 代码签名（Authenticode）需证书，本环境无法签名；下载页与 Release 提供 **SHA-256 校验值**作为替代校验手段。
+
+---
+
 ## 导出清单新增「卸载命令」列（R10）
 
 - 导出软件清单（CSV/HTML/TSV）新增「卸载命令」列，内容为 `getUninstallCommand` 规范化后的命令（MSI 补全为 `msiexec.exe /x {GUID} /quiet /norestart`），便于导出后批量脚本化卸载或留档核对。

@@ -34,6 +34,7 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonArray>
+#include <QCryptographicHash>
 #include <QDateTime>
 #include <QCoreApplication>
 #include <QtConcurrent>
@@ -862,11 +863,23 @@ void UninstallerWindow::built_list(bool allowCache) {
     saveSoftwareCache();
 }
 
+// 缓存完整性盐：与缓存内容一起参与哈希，使“直接清空 items 数组”等粗陋投毒失效。
+// 说明：这是防君子不防小人的轻量护栏——能写 exe 目录的攻击者也能从二进制中提取此盐并重算校验值；
+// 但它能挡住最常见的“随手改 JSON 隐藏已装软件”，并能在缓存意外损坏时回退到实时扫描。
+static const QByteArray kCacheIntegritySalt = QByteArrayLiteral(
+    "UninstallerMgr-cache-v1-9f3c2a7b-d4e8-4b1c-8a6f-2e5d9c0b1a3f");
+
+static QByteArray cacheIntegrityOf(const QJsonArray& items) {
+    const QByteArray payload = QJsonDocument(items).toJson(QJsonDocument::Compact);
+    return QCryptographicHash::hash(payload + kCacheIntegritySalt, QCryptographicHash::Sha256).toHex();
+}
+
 bool UninstallerWindow::loadSoftwareCache() {
     const QString path = QCoreApplication::applicationDirPath() + QStringLiteral("/uninstaller_cache.json");
     QFile f(path);
     if (!f.open(QIODevice::ReadOnly)) return false;
-    QJsonDocument doc = QJsonDocument::fromJson(f.readAll());
+    const QByteArray raw = f.readAll();
+    QJsonDocument doc = QJsonDocument::fromJson(raw);
     if (doc.isNull() || !doc.isObject()) return false;
     QJsonObject root = doc.object();
     const qint64 ts = root.value(QStringLiteral("timestamp")).toVariant().toLongLong();
@@ -874,6 +887,12 @@ bool UninstallerWindow::loadSoftwareCache() {
     if (QDateTime::currentMSecsSinceEpoch() - ts > 3600LL * 1000LL) return false;
     const QJsonArray items = root.value(QStringLiteral("items")).toArray();
     if (items.isEmpty()) return false;
+
+    // 完整性校验（F8）：缺失或不符均视为被篡改/损坏，丢弃缓存、回退实时扫描。
+    const QByteArray expect = cacheIntegrityOf(items);
+    if (root.value(QStringLiteral("integrity")).toString().toLatin1() != expect) {
+        return false;
+    }
 
     m_softwareList.clear();
     m_softwareList.reserve(items.size());
@@ -933,6 +952,8 @@ void UninstallerWindow::saveSoftwareCache() {
     QJsonObject root;
     root[QStringLiteral("timestamp")] = QDateTime::currentMSecsSinceEpoch();
     root[QStringLiteral("items")] = items;
+    // 完整性校验（F8）：把 items 的哈希随缓存一起写出，加载时校验，挡住粗陋投毒。
+    root[QStringLiteral("integrity")] = QString::fromLatin1(cacheIntegrityOf(items));
     QJsonDocument doc(root);
     const QString path = QCoreApplication::applicationDirPath() + QStringLiteral("/uninstaller_cache.json");
     QFile f(path);
@@ -1397,11 +1418,17 @@ void UninstallerWindow::locateInRegistry() {
     QString key = hiveName + "\\" + QString::fromStdString(sw->regPath);
 
     // 若 regedit 已打开，先关闭以使其重新读取 LastKey。
-    QProcess::execute("taskkill", QStringList() << "/IM" << "regedit.exe" << "/F");
+    // 使用 System32 下的完整路径，避免应用目录被种植同名二进制（F4）。
+    wchar_t sysDir[MAX_PATH] = {0};
+    GetSystemDirectoryW(sysDir, MAX_PATH);
+    QString sysPath = sysDir[0] ? QString::fromWCharArray(sysDir) : QStringLiteral("C:\\Windows\\System32");
+    QString taskkill = sysPath + QStringLiteral("\\taskkill.exe");
+    QString regedit  = sysPath + QStringLiteral("\\regedit.exe");
+    QProcess::execute(taskkill, QStringList() << "/IM" << "regedit.exe" << "/F");
     QSettings lastKey("HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Applets\\Regedit",
                       QSettings::NativeFormat);
     lastKey.setValue("LastKey", key);
-    QProcess::startDetached("regedit.exe");
+    QProcess::startDetached(regedit);
 }
 
 // ⑨ 切换亮/暗主题并持久化。
@@ -2112,8 +2139,14 @@ void UninstallerWindow::openFileLocation() {
     } else {
         params = QString("/e,\"%1\"").arg(native);
     }
+    // 使用 System32 下的完整路径，避免应用目录被种植同名二进制（F4）。
+    wchar_t sysDir[MAX_PATH] = {0};
+    GetSystemDirectoryW(sysDir, MAX_PATH);
+    std::wstring explorer = (sysDir[0] ? std::wstring(sysDir) : std::wstring(L"C:\\Windows\\System32"));
+    if (!explorer.empty() && explorer.back() != L'\\') explorer += L'\\';
+    explorer += L"explorer.exe";
     auto ret = reinterpret_cast<intptr_t>(::ShellExecuteW(
-        nullptr, L"open", L"explorer.exe",
+        nullptr, L"open", explorer.c_str(),
         params.toStdWString().c_str(), nullptr, SW_SHOWNORMAL));
     if (ret <= 32) {
         QMessageBox::warning(this, getlang(0xFu).toString(), getlang(0x3B).toString());

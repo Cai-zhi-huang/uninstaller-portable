@@ -3,6 +3,7 @@
 #include "registry.hpp"
 #include "systools.hpp"
 #include "place.hpp"
+#include <windows.h>
 #include <QCoreApplication>
 #include <QStandardPaths>
 #include <QDir>
@@ -1127,7 +1128,21 @@ static void logOrphanCheck(const std::string& name, const std::string& uninstall
 //     但允许其下“应用命名”的残留子目录（如 X:\Users\x\AppData\Local\App、X:\ProgramData\App）。
 static bool isProtectedPath(const std::string& p) {
     if (p.empty()) return true;
+    // 8.3 短名（如 C:\PROGRA~1）会绕过下面的前缀匹配，先用 GetLongPathNameW 还原为长名（F3）。
+    // 路径不存在时 GetLongPathNameW 失败，退回原值（通常无法删除，防护交给存在性检查）。
     std::string s = p;
+    {
+        wchar_t wbuf[MAX_PATH * 2] = {0};
+        if (MultiByteToWideChar(CP_UTF8, 0, p.c_str(), -1, wbuf, MAX_PATH * 2)) {
+            wchar_t longBuf[MAX_PATH * 2] = {0};
+            DWORD ln = GetLongPathNameW(wbuf, longBuf, MAX_PATH * 2);
+            if (ln && ln < MAX_PATH * 2) {
+                char tmp[MAX_PATH * 2] = {0};
+                if (WideCharToMultiByte(CP_UTF8, 0, longBuf, -1, tmp, MAX_PATH * 2, nullptr, nullptr))
+                    s = tmp;
+            }
+        }
+    }
     for (auto& c : s) if (c == '\\') c = '/';
     while (s.size() > 1 && s.back() == '/') s.pop_back();
     std::string lower = s;
@@ -1285,17 +1300,29 @@ bool Registry::deleteDirectory(const std::string& path)
     }
 }
 
+// 返回 System32 下指定系统二进制的完整路径，避免仅用文件名时应用目录被写入恶意同名文件而被种植执行（F4）。
+static std::wstring systemBinary(const wchar_t* name) {
+    wchar_t sys[MAX_PATH] = {0};
+    UINT n = GetSystemDirectoryW(sys, MAX_PATH);
+    std::wstring dir = (n && n < MAX_PATH) ? std::wstring(sys) : std::wstring(L"C:\\Windows\\System32");
+    if (!dir.empty() && dir.back() != L'\\') dir += L'\\';
+    return dir + name;
+}
+
 // 以管理员权限删除注册表项（HKLM 访问被拒时使用）。
 // 通过 runas 调起 reg.exe 删除，路径以 UTF-16 传入，兼容中文/特殊字符。
 static bool deleteRegistryKeyElevated(HKEY hive, const std::string& regPath) {
     QString hiveName = (hive == HKEY_LOCAL_MACHINE) ? "HKLM" : "HKCU";
     std::wstring wFull = utf8ToWide(hiveName.toStdString() + "\\" + regPath);
+    // 纵深防御：注册表路径含引号属于非法结构；若被植入双引号会破坏 reg.exe 参数边界造成注入，
+    // 直接拒绝提权删除（F2）。
+    if (wFull.find(L'"') != std::wstring::npos) return false;
     std::wstring wParams = L"delete \"" + wFull + L"\" /f";
     SHELLEXECUTEINFOW sei = { sizeof(sei) };
     sei.fMask = SEE_MASK_NOCLOSEPROCESS;
     sei.hwnd = NULL;
     sei.lpVerb = L"runas";          // 触发 UAC 提权
-    sei.lpFile = L"reg.exe";
+    sei.lpFile = systemBinary(L"reg.exe").c_str();  // 完整路径，防应用目录种植（F4）
     sei.lpParameters = wParams.c_str();
     sei.nShow = SW_HIDE;
     if (!ShellExecuteExW(&sei) || !sei.hProcess) {
@@ -1303,7 +1330,20 @@ static bool deleteRegistryKeyElevated(HKEY hive, const std::string& regPath) {
     }
     // 必须先等 reg.exe 进程结束，再取退出码；否则刚启动就拿 STILL_ACTIVE(259)，
     // 导致“明明删成功却误报失败”且列表不刷新。
-    WaitForSingleObject(sei.hProcess, INFINITE);
+    // 等待期间泵 Windows 消息，避免 UAC 弹窗时主线程 UI 假死（F5）。
+    MSG msg;
+    while (true) {
+        DWORD rc = MsgWaitForMultipleObjects(1, &sei.hProcess, FALSE, INFINITE, QS_ALLINPUT);
+        if (rc == WAIT_OBJECT_0) break;               // 进程已结束
+        if (rc == WAIT_OBJECT_0 + 1) {                // 有窗口消息待处理
+            while (PeekMessageW(&msg, NULL, 0, 0, PM_REMOVE)) {
+                TranslateMessage(&msg);
+                DispatchMessageW(&msg);
+            }
+        } else {
+            break;                                     // 等待失败，跳出
+        }
+    }
     DWORD exitCode = 0;
     GetExitCodeProcess(sei.hProcess, &exitCode);
     CloseHandle(sei.hProcess);
