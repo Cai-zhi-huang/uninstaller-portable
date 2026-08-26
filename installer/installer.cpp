@@ -115,7 +115,7 @@ static void WriteUninstallRegistry(const std::wstring& target) {
         SetRegStr(hk, L"DisplayIcon", target + L"\\uninstaller.exe");
         SetRegStr(hk, L"InstallLocation", target);
         SetRegStr(hk, L"Publisher", L"CZH720");
-        SetRegStr(hk, L"DisplayVersion", L"0.0.4");
+        SetRegStr(hk, L"DisplayVersion", L"0.0.6");
         DWORD one = 1;
         RegSetValueExW(hk, L"NoModify", 0, REG_DWORD, (const BYTE*)&one, sizeof(one));
         RegSetValueExW(hk, L"NoRepair", 0, REG_DWORD, (const BYTE*)&one, sizeof(one));

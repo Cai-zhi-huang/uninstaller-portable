@@ -2,9 +2,9 @@
 
 一款轻量、绿色的 Windows 卸载管理工具，帮助你集中查看本机已安装软件，识别并清理卸载后残留的注册表项与“空壳”项。
 
-> 当前版本：**v0.0.5 (试用版)** ｜ 系统要求：Windows 10 / 11（64 位）
+> 当前版本：**v0.0.6 (试用版)** ｜ 系统要求：Windows 10 / 11（64 位）
 
-[![Release](https://img.shields.io/badge/release-v0.0.5-blue)](https://github.com/Cai-zhi-huang/uninstaller-portable/releases/tag/v0.0.5)
+[![Release](https://img.shields.io/badge/release-v0.0.6-blue)](https://github.com/Cai-zhi-huang/uninstaller-portable/releases/tag/v0.0.6)
 [![License](https://img.shields.io/badge/license-个人学习使用-lightgrey)](https://github.com/Cai-zhi-huang/uninstaller-portable)
 
 ---
@@ -24,8 +24,8 @@
 
 ## 下载
 
-- **GitHub Release（推荐）**：[卸载管理器 v0.0.5 (试用版)](https://github.com/Cai-zhi-huang/uninstaller-portable/releases/tag/v0.0.5)
-- **直接下载便携包（zip，约 23 MB）**：[uninstaller-portable.zip](https://github.com/Cai-zhi-huang/uninstaller-portable/releases/download/v0.0.5/uninstaller-portable.zip)
+- **GitHub Release（推荐）**：[卸载管理器 v0.0.6 (试用版)](https://github.com/Cai-zhi-huang/uninstaller-portable/releases/tag/v0.0.6)
+- **直接下载便携包（zip，约 23 MB）**：[uninstaller-portable.zip](https://github.com/Cai-zhi-huang/uninstaller-portable/releases/download/v0.0.6/uninstaller-portable.zip)
 
 解压后双击 `uninstaller.exe` 即可运行，**无需安装、无外部依赖**（Qt 运行库已随附）。
 

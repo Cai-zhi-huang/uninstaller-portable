@@ -1943,10 +1943,40 @@ void UninstallerWindow::showUpdatePopup() {
     btnRow->addWidget(ok);
     layout->addLayout(btnRow);
 
+    // 辅助：把弹窗诊断信息追加到 startup.log（便于排查“勾了仍弹”）
+    auto logPopup = [&](const QString& msg) {
+        QFile f(QCoreApplication::applicationDirPath() + QStringLiteral("/startup.log"));
+        if (f.open(QIODevice::WriteOnly | QIODevice::Append | QIODevice::Text)) {
+            QTextStream ts(&f);
+            ts << QDateTime::currentDateTime().toString(Qt::ISODate)
+               << " [updatePopup] " << msg << "\n";
+        }
+    };
+
     QObject::connect(ok, &QPushButton::clicked, &dlg, &QDialog::accept);
+    // 勾选/取消时立即持久化，不再仅依赖 OK 路径；避免某些情况下 accept 未触发或设置未 flush
+    QObject::connect(cb, &QCheckBox::checkStateChanged, [&](Qt::CheckState state) {
+        if (state == Qt::Checked) {
+            settings.setValue(dontShowKey, appVersionFull());
+            logPopup(QStringLiteral("checked -> set lastShown=") + appVersionFull());
+        } else {
+            settings.remove(dontShowKey);
+            logPopup(QStringLiteral("unchecked -> removed lastShown"));
+        }
+        settings.sync();
+    });
+    logPopup(QStringLiteral("read lastShown=") + last + QStringLiteral(" expected=") + appVersionFull()
+             + QStringLiteral(" match=") + (last == appVersionFull() ? QStringLiteral("yes") : QStringLiteral("no")));
+
     int rc = dlg.exec();
     if (rc == QDialog::Accepted && cb->isChecked()) {
         settings.setValue(dontShowKey, appVersionFull());
+        settings.sync();
+        logPopup(QStringLiteral("accepted -> set lastShown=") + appVersionFull());
+    } else if (rc == QDialog::Accepted && !cb->isChecked()) {
+        logPopup(QStringLiteral("accepted -> unchecked, nothing written"));
+    } else {
+        logPopup(QStringLiteral("rejected rc=") + QString::number(rc));
     }
 }
 
