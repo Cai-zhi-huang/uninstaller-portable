@@ -4,6 +4,18 @@
 
 ---
 
+## v0.0.7 (试用版) — 安全加固轮次（F11–F14）
+
+> 独立安全复审发现并修复 4 处「安全审计报告 F1–F10」遗留/新增漏洞。
+
+### 安全修复
+- **F11（高危）残留/目录删除防 junction 跟随**：`deleteResidualFiles` / `deleteDirectory` 原先用 `fs::remove_all`，而 `isProtectedPath` 只比对字符串路径。若残留目录是 junction/符号链接指向 `C:\Windows\System32` 等系统目录，`remove_all` 会跟随 junction 误删系统文件。现已：删除前用 `fs::weakly_canonical` 解析真实路径并重查 `isProtectedPath`；对重解析点仅删除链接本体（`fs::remove`），绝不进入目标目录递归删除。
+- **F12（中危）安装器自解压路径穿越**：自解压安装器原先 `dest = target + "\\" + 负载内相对路径`，未校验 `..` / 绝对路径。恶意或破损负载可把文件写出安装目录之外（如 `C:\Windows\System32`）。现已用 `GetFullPathNameW` 解析后严格校验落点必须位于 `target\` 之内，越界文件跳过。
+- **F13（中危）MSI 卸载走完整路径**：MSI 卸载原先调用裸 `msiexec.exe`，便携目录用户可写，可被植入同名恶意 `msiexec.exe` 劫持（F4 漏网项）。现已改为 `System32\msiexec.exe` 完整路径。
+- **F14（中危）自卸载防 junction 跟随**：`uninst.exe` 自卸载原先用 PowerShell `Remove-Item -Recurse -Force`，会跟随 junction 删除系统目录。现改为 `cmd /c rmdir /s /q`（不遍历 junction），PowerShell/cmd 均走 System32 完整路径。
+
+---
+
 ## v0.0.6 (试用版) — 热修：更新弹窗“不再提示此版本”失效
 
 > 修复 v0.0.5 中勾选“不再提示此版本”后，下次启动仍会弹出更新日志的问题。

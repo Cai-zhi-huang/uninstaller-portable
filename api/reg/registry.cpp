@@ -14,6 +14,8 @@
 
 // 前向声明：normalizeCommandLineForArgv 会调用它，而它定义在下方。
 static bool splitExeAndParams(const std::wstring& cmd, std::wstring& exePath, std::wstring& params);
+// 前向声明：getUninstallCommand 对 MSI 需取 System32 完整路径的 msiexec，而它定义在下方。
+static std::wstring systemBinary(const wchar_t* name);
 
 // 某些注册表 UninstallString 写成 C:\Program Files\...\uninst.exe /arg（路径无引号），
 // 直接传给 CommandLineToArgvW 会按空格拆成 ["C:\\Program", "Files\\...\\uninst.exe", "/arg"]，
@@ -274,7 +276,9 @@ std::string Registry::getUninstallCommand(const SoftwareInfo& software) {
         if (pos != std::string::npos) {
             std::string guid = software.uninstallString.substr(pos);
             guid.erase(std::remove(guid.begin(), guid.end(), '"'), guid.end());
-            return "msiexec.exe /x " + guid + " /quiet /norestart";
+            // F13：用 System32 完整路径的 msiexec，避免便携目录（用户可写）被植入同名恶意
+            // msiexec.exe 劫持（F4 漏网项：报告只列了 reg/powershell/taskkill/explorer）。
+            return wideToUtf8(systemBinary(L"msiexec.exe")) + " /x " + guid + " /quiet /norestart";
         }
         // 形如 MsiExec.exe /X{GUID} 但没有花括号时，原样返回
         return software.uninstallString;
@@ -1251,6 +1255,13 @@ std::vector<std::string> Registry::scanResidualFiles(const SoftwareInfo& softwar
     return result;
 }
 
+// 判断路径是否为“重解析点”（junction 或符号链接）。这类入口若指向系统目录，
+// 普通的 fs::remove_all 会“跟随”进目标目录递归删除，造成灾难性误删（F11）。
+static bool isReparsePoint(const std::wstring& wPath) {
+    DWORD attr = GetFileAttributesW(wPath.c_str());
+    return (attr != INVALID_FILE_ATTRIBUTES) && (attr & FILE_ATTRIBUTE_REPARSE_POINT);
+}
+
 bool Registry::deleteResidualFiles(const std::vector<std::string>& files)
 {
     bool success = true;
@@ -1263,6 +1274,21 @@ bool Registry::deleteResidualFiles(const std::vector<std::string>& files)
         try {
             std::wstring wPath = utf8ToWide(file);
             if (!fs::exists(wPath)) continue;
+            // F11：先解析真实路径，防止 junction/symlink 指向受保护系统目录（如 C:\Windows\System32）
+            // 被后续 remove_all 跟随误删；真实路径受保护则整条跳过。
+            std::error_code ecReal;
+            std::string realPath = wideToUtf8(fs::weakly_canonical(wPath, ecReal).wstring().c_str());
+            if (isProtectedPath(realPath)) {
+                success = false;
+                continue;
+            }
+            // F11：重解析点（junction/符号链接）只删除链接本身，绝不进入目标目录递归删除。
+            if (isReparsePoint(wPath)) {
+                std::error_code ecRm;
+                fs::remove(wPath, ecRm);   // 仅移除链接，不触达目标
+                if (ecRm) success = false;
+                continue;
+            }
             // ① 优先送回收站（FOF_ALLOWUNDO），误删时可从回收站恢复；
             //    SHFileOperationW 的 pFrom 必须是“双 NULL 终止”的路径列表。
             std::wstring from = wPath;
@@ -1274,7 +1300,7 @@ bool Registry::deleteResidualFiles(const std::vector<std::string>& files)
             op.fFlags = FOF_ALLOWUNDO | FOF_NOCONFIRMATION | FOF_NOERRORUI | FOF_SILENT;
             int r = SHFileOperationW(&op);
             if (r != 0) {
-                // 回收站失败（如跨盘/权限）时回退硬删。
+                // 回收站失败（如跨盘/权限）时回退硬删；此路径已确认非受保护且非重解析点。
                 if (fs::is_directory(wPath)) fs::remove_all(wPath);
                 else fs::remove(wPath);
             }
@@ -1292,6 +1318,15 @@ bool Registry::deleteDirectory(const std::string& path)
     if (isProtectedPath(path)) return false;
     try {
         std::wstring wPath = utf8ToWide(path);
+        // F11：解析真实路径，防 junction 指向受保护系统目录被跟随误删。
+        std::error_code ecReal;
+        std::string realPath = wideToUtf8(fs::weakly_canonical(wPath, ecReal).wstring().c_str());
+        if (isProtectedPath(realPath)) return false;
+        // F11：重解析点只删链接本身。
+        if (isReparsePoint(wPath)) {
+            std::error_code ecRm;
+            return !ecRm && fs::remove(wPath, ecRm);
+        }
         fs::remove_all(wPath);
         return true;
     }

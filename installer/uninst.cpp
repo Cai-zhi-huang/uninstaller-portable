@@ -19,17 +19,6 @@ static std::wstring System32Binary(const wchar_t* name) {
     return dir + name;
 }
 
-// PowerShell 单引号字符串中，单引号用两个单引号转义；用于安全地拼入 -LiteralPath（F1）。
-static std::wstring EscapePsSingleQuotes(const std::wstring& in) {
-    std::wstring out = in;
-    size_t pos = 0;
-    while ((pos = out.find(L"'", pos)) != std::wstring::npos) {
-        out.replace(pos, 1, L"''");
-        pos += 2;
-    }
-    return out;
-}
-
 static std::wstring SelfDir() {
     wchar_t mod[MAX_PATH * 2];
     GetModuleFileNameW(nullptr, mod, (DWORD)_countof(mod));
@@ -81,12 +70,21 @@ static void DoUninstall(const std::wstring& dir) {
     KillApp();
     RemoveShortcut();
     RemoveReg();
-    // 延迟删除安装目录：等待本进程退出后由 PowerShell 执行，避免“删除正在运行的自己”自锁
+    // 延迟删除安装目录：待本进程退出后再删，避免“删除正在运行的自己”自锁。
     DWORD pid = GetCurrentProcessId();
-    // 先把安装目录中的单引号转义，再拼进 PowerShell 单引号字符串，杜绝命令注入（F1）。
-    std::wstring safeDir = EscapePsSingleQuotes(dir);
+    // F14：删除用 cmd /c rmdir /s /q（而非 PowerShell Remove-Item -Recurse）。
+    // 关键差异：rmdir /s 不会“跟随”目录内的 junction/符号链接进入目标目录递归删除，
+    // 因此即便安装目录内被植入指向 C:\Windows\System32 的 junction，也只会删掉该 junction 链接本身，
+    // 不会误删系统目录。cmd.exe 同样走 System32 完整路径（F4）。
+    std::wstring cmdPath = System32Binary(L"cmd.exe");
+    // dir 内若含双引号，写成 ""（cmd 字面量转义）；正常安装路径不含引号。
+    std::wstring safeDir = dir;
+    for (size_t p = 0; (p = safeDir.find(L"\"")) != std::wstring::npos; ) {
+        safeDir.replace(p, 1, L"\"\"");
+        p += 2;
+    }
     std::wstring psCmd = L"Wait-Process -Id " + std::to_wstring(pid) +
-        L"; Remove-Item -LiteralPath '" + safeDir + L"' -Recurse -Force";
+        L"; & '" + cmdPath + L"' /c rmdir /s /q \"" + safeDir + L"\"";
     std::wstring params = L"-NoProfile -WindowStyle Hidden -Command \"" + psCmd + L"\"";
     // 用 System32 下的完整 powershell.exe 路径，避免应用目录被种植同名二进制（F4）。
     std::wstring psPath = System32Binary(L"WindowsPowerShell\\v1.0\\powershell.exe");

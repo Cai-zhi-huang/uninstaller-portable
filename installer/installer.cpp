@@ -16,6 +16,7 @@
 #include <cstring>
 #include <string>
 #include <vector>
+#include <algorithm>
 
 static std::wstring Utf8ToW(const std::string& s) {
     if (s.empty()) return L"";
@@ -115,7 +116,7 @@ static void WriteUninstallRegistry(const std::wstring& target) {
         SetRegStr(hk, L"DisplayIcon", target + L"\\uninstaller.exe");
         SetRegStr(hk, L"InstallLocation", target);
         SetRegStr(hk, L"Publisher", L"CZH720");
-        SetRegStr(hk, L"DisplayVersion", L"0.0.6");
+        SetRegStr(hk, L"DisplayVersion", L"0.0.7");
         DWORD one = 1;
         RegSetValueExW(hk, L"NoModify", 0, REG_DWORD, (const BYTE*)&one, sizeof(one));
         RegSetValueExW(hk, L"NoRepair", 0, REG_DWORD, (const BYTE*)&one, sizeof(one));
@@ -156,10 +157,30 @@ static int DoInstall() {
 
     bool allWritten = true;
     for (auto& fe : files) {
-        std::wstring dest = target + L"\\" + fe.rel;
-        size_t slash = dest.find_last_of(L"\\/");
-        if (slash != std::wstring::npos) MakeDirs(dest.substr(0, slash));
-        if (!WriteFileData(dest, fe.data.data(), fe.data.size())) allWritten = false;
+        // 防路径穿越（CWE-22，F12）：负载内的相对路径可能含 “..” 或绝对/UNC/设备路径，
+        // 直接拼到 target 后会写出目标目录之外（如 C:\Windows\System32）。
+        // 用 GetFullPathNameW 解析 “..”/相对段后，严格校验落点必须以 target\ 为前缀。
+        std::wstring rel = fe.rel;
+        for (auto& c : rel) if (c == L'/') c = L'\\';
+        std::wstring dest = target + L"\\" + rel;
+        wchar_t full[MAX_PATH * 4] = { 0 };
+        if (GetFullPathNameW(dest.c_str(), (DWORD)_countof(full), full, nullptr) == 0) {
+            allWritten = false;   // 路径解析失败，跳过该文件
+            continue;
+        }
+        std::wstring resolved = full;
+        std::wstring tp = target;
+        std::transform(tp.begin(), tp.end(), tp.begin(), ::towlower);
+        std::transform(resolved.begin(), resolved.end(), resolved.begin(), ::towlower);
+        // 必须：resolved 严格以 target\ 开头（长于 target 且下一字符为分隔符），否则视为越界跳过。
+        if (resolved.size() <= tp.size() || resolved.compare(0, tp.size(), tp) != 0 ||
+            resolved[tp.size()] != L'\\') {
+            allWritten = false;
+            continue;
+        }
+        size_t slash = resolved.find_last_of(L"\\/");
+        if (slash != std::wstring::npos) MakeDirs(resolved.substr(0, slash));
+        if (!WriteFileData(resolved, fe.data.data(), fe.data.size())) allWritten = false;
     }
 
     wchar_t startm[MAX_PATH];
