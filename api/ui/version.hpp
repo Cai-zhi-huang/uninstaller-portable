@@ -12,7 +12,7 @@
 //  注意：Windows 文件属性中的版本信息在 appicon.rc 的 VERSIONINFO 中同步定义，
 //  更新版本号时请两处一起改。
 // ============================================================
-#define APP_VERSION        "0.0.3"
+#define APP_VERSION        "0.0.4"
 #define APP_VERSION_SUFFIX "试用版"
 
 inline QString appVersionFull() {

@@ -4,6 +4,16 @@
 
 ---
 
+## v0.0.4 (试用版) — 热修：打开文件位置失效 + 详情版本显示
+
+> 修复 v0.0.3 发布后发现的两个缺陷。
+
+### 缺陷修复
+- **打开文件位置失效**：`openFileLocation()` 在 F4 加固中误用 `GetSystemDirectoryW` 拼出 `C:\Windows\System32\explorer.exe`，但该路径下并无 explorer.exe（资源管理器实际位于 `C:\Windows\explorer.exe`），导致 `ShellExecuteW` 返回 ≤32 并误报「找不到文件位置」。改为 `GetWindowsDirectoryW` 取 Windows 主目录，既修复失效又保留 F4 的防种植目标。
+- **详情页版本显示 0.0.0**：安装器 `installer.cpp` 的 `DisplayVersion` 被硬编码为 `L"0.0.0"`，未随版本 bump。改为 `L"0.0.4"`，与 `version.hpp` / `appicon.rc` 同步。
+
+---
+
 ## v0.0.3 (试用版) — 安全加固（F1–F10）
 
 > 全面安全审计与加固，防御「命令注入 / 路径绕过 / DLL 种植劫持 / 缓存投毒 / 意外提权」等攻击面。完整过程见 `tools/security_audit_report.md`（本地，未入库）。

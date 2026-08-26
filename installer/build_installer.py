@@ -8,13 +8,18 @@ BASE = os.path.join(HERE, "installer_base.exe")
 PORTABLE = "D:/CZH720/tools/uninstaller-portable"
 OUT = os.environ.get("INSTALLER_OUT", "D:/CZH720/tools/Uninstaller-Setup.exe")
 
-SKIP = {"uninstaller_diag.log"}  # 排除运行时生成的诊断日志
+SKIP_FILES = {"uninstaller_diag.log"}          # 运行时诊断日志
+SKIP_DIRS = {".git", "log"}                     # 仓库元数据 / 运行时日志目录
+SKIP_SUFFIX = (".bak",)                         # 备份文件
+SKIP_NAMES = {"uninstaller_cache.json"}         # 运行时缓存（含用户数据，不应随安装包分发）
 
 def collect(portable):
     entries = []
-    for dp, _, fs in os.walk(portable):
+    for dp, dns, fs in os.walk(portable):
+        # 原地修剪要跳过的目录，避免 walk 进入 .git（26MB+，且泄露仓库历史）
+        dns[:] = [d for d in dns if d not in SKIP_DIRS]
         for f in fs:
-            if f in SKIP:
+            if f in SKIP_FILES or f in SKIP_NAMES or f.endswith(SKIP_SUFFIX):
                 continue
             full = os.path.join(dp, f)
             rel = os.path.relpath(full, portable).replace(os.sep, "/")

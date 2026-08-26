@@ -2139,10 +2139,12 @@ void UninstallerWindow::openFileLocation() {
     } else {
         params = QString("/e,\"%1\"").arg(native);
     }
-    // 使用 System32 下的完整路径，避免应用目录被种植同名二进制（F4）。
-    wchar_t sysDir[MAX_PATH] = {0};
-    GetSystemDirectoryW(sysDir, MAX_PATH);
-    std::wstring explorer = (sysDir[0] ? std::wstring(sysDir) : std::wstring(L"C:\\Windows\\System32"));
+    // 资源管理器实际位于 %SystemRoot%（C:\Windows\explorer.exe），并不在 System32 下。
+    // 用 GetWindowsDirectoryW 取 Windows 主目录完整路径：既修复“打开文件位置”失效，
+    // 又避免从应用目录解析 explorer.exe（F4 防 DLL/二进制种植）。
+    wchar_t winDir[MAX_PATH] = {0};
+    GetWindowsDirectoryW(winDir, MAX_PATH);
+    std::wstring explorer = (winDir[0] ? std::wstring(winDir) : std::wstring(L"C:\\Windows"));
     if (!explorer.empty() && explorer.back() != L'\\') explorer += L'\\';
     explorer += L"explorer.exe";
     auto ret = reinterpret_cast<intptr_t>(::ShellExecuteW(
