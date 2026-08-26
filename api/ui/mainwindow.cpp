@@ -1598,6 +1598,14 @@ void UninstallerWindow::scanResiduals() {
 
     auto software = softwareAtRow(row);
 
+    // 正常安装/运行的软件不是残留项（孤儿项），扫描残留本就没有意义：
+    // scanResidualFiles 内部对 !isOrphaned 直接返回空，若仍走完流程会弹出模糊的“未找到”。
+    // 这里先给出明确说明，避免用户误以为“扫描失败/找不到文件”。
+    if (!software->isOrphaned) {
+        QMessageBox::information(this, getlang(0x12).toString(), getlang(0x54).toString());
+        return;
+    }
+
     QProgressDialog progress(getlang(0x11u).toString(), getlang(0x3).toString(), 0, 0, this);
     progress.setWindowModality(Qt::WindowModal);
     progress.show();
@@ -2026,6 +2034,12 @@ void UninstallerWindow::showDetailDialog(int row) {
     QPushButton* btnUninstall = new QPushButton(getlang(0x1F).toString());
     btnUninstall->setObjectName("uninstallBtn");
     QPushButton* btnScan = new QPushButton(getlang(0x20).toString());
+    // 仅残留项（已卸载但仍有遗留文件）才有可扫描的残留；正常软件置灰并给出原因，
+    // 避免用户点击后只看到模糊的“未找到”。
+    if (!sw->isOrphaned) {
+        btnScan->setEnabled(false);
+        btnScan->setToolTip(QString::fromUtf8(u8"仅“残留项”（已卸载但仍有遗留文件）可扫描残留"));
+    }
     QPushButton* btnCopy = new QPushButton(getlang(0x2F).toString());
     funcGrid->addWidget(btnOpen, 0, 0);
     funcGrid->addWidget(btnUninstall, 0, 1);
