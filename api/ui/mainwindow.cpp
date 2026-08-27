@@ -1703,6 +1703,13 @@ void UninstallerWindow::deleteRegistryEntry() {
     box.setDefaultButton(QMessageBox::No);
     if (box.exec() != QMessageBox::Yes) return;
 
+    // 系统关键组件（Windows 更新/驱动/运行库等）不可删除，与卸载路径保持一致的拦截（P1）。
+    if (isCriticalSystemItem(sw)) {
+        QMessageBox::critical(this, QString::fromUtf8(u8"禁止删除"),
+            QString::fromUtf8(u8"该条目为系统关键组件（如 Windows 更新 / 驱动 / 运行库），删除可能导致系统功能异常，已阻止。"));
+        return;
+    }
+
     if (m_busy) return;
     m_busy = true;
     bool ok = Registry::deleteRegistryKey(sw->hive, sw->regPath);
@@ -1743,6 +1750,13 @@ void UninstallerWindow::forceDeleteEntry() {
     box.setStandardButtons(QMessageBox::Yes | QMessageBox::No);
     box.setDefaultButton(QMessageBox::No);
     if (box.exec() != QMessageBox::Yes) return;
+
+    // 即便“强制删除”，系统关键组件（Windows 更新/驱动/运行库）也绝不可删，避免破坏系统（P1）。
+    if (isCriticalSystemItem(sw)) {
+        QMessageBox::critical(this, QString::fromUtf8(u8"禁止删除"),
+            QString::fromUtf8(u8"该条目为系统关键组件（如 Windows 更新 / 驱动 / 运行库），即使强制删除也已阻止。"));
+        return;
+    }
 
     if (m_busy) return;
     m_busy = true;
@@ -2176,7 +2190,9 @@ void UninstallerWindow::openFileLocation() {
     // 改用 ShellExecuteW 直接构造命令参数字符串，避免 QProcess::startDetached 在 Windows
     // 上对 /select,<path> 中含空格路径的参数加引号方式与 explorer 解析不兼容，
     // 导致资源管理器打开默认“文档”夹而非目标位置。
-    QString native = QDir::toNativeSeparators(target);
+    // 防御：target 若含双引号（注册表被构造的异常值）会破坏 /select 参数解析，
+    // 直接剔除（Windows 文件名本就不允许双引号，正常路径不会含）。
+    QString native = QDir::toNativeSeparators(target).replace("\"", "");
     QString params;
     if (selectFile) {
         params = QString("/select,\"%1\"").arg(native);
@@ -2576,7 +2592,10 @@ void UninstallerWindow::filterSoftware() {
     // 清空搜索词后再恢复排序。这样隐藏状态在稳定环境下工作。
     // 恢复排序时保留用户此前设置的排序列/方向（而非强制回到名称升序），
     // 否则用户搜完清空搜索框后，刚按大小排好的列表会被重置，体验差。
-    bool wantSorting = compactTokens.isEmpty();
+    // 仅当有搜索词“且”未开启“仅显示残留项”时才启用排序。开启残留过滤时排序同样必须
+    // 关闭：否则 setRowHidden 在排序启用下与排序代理的行映射交互不可靠（见上方注释），
+    // 会导致残留过滤隐藏/显示错乱、过滤不生效。与搜索词路径保持一致。
+    bool wantSorting = compactTokens.isEmpty() && !m_showOrphanOnly;
     if (m_tableWidget->isSortingEnabled() != wantSorting) {
         int sortCol = -1;
         Qt::SortOrder sortOrder = Qt::AscendingOrder;

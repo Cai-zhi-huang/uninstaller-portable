@@ -813,7 +813,11 @@ static std::string findExeOnDisk(const SoftwareInfo& sw) {
             for (auto it = fs::recursive_directory_iterator(root, opts, ec);
                  it != fs::recursive_directory_iterator() && it.depth() <= maxDepth;
                  it.increment(ec)) {
-                if (ec) { it.disable_recursion_pending(); it.increment(ec); continue; }
+                // 注意：ec 出错时仅 disable_recursion_pending + 清除错误后 continue，
+                // 由 for 增量部分的 it.increment(ec) 继续推进；绝不可在此再手动
+                // increment 一次，否则对 recursive_directory_iterator 双重 increment 是
+                // 未定义行为（迭代器可能已到 end），且会丢失 disable_recursion_pending 状态。
+                if (ec) { it.disable_recursion_pending(); ec.clear(); continue; }
                 if (it->is_regular_file(ec)) {
                     std::wstring name = it->path().filename().wstring();
                     std::transform(name.begin(), name.end(), name.begin(), ::towlower);
@@ -1386,6 +1390,10 @@ static bool deleteRegistryKeyElevated(HKEY hive, const std::string& regPath) {
 }
 
 bool Registry::deleteRegistryKey(HKEY hive, const std::string& regPath) {
+    // 空路径护栏（纵深防御，P0）：RegDeleteTreeW(hive, L"") 会删除整个 hive 根键
+    //（HKLM 即整台机器注册表，系统将无法启动），后果灾难性。注册表项路径绝不可为空，
+    // 直接拒绝。常规数据非空，但缓存投毒 / 异常条目可能构造空路径，必须在此兜底。
+    if (regPath.empty()) return false;
     std::wstring wPath = utf8ToWide(regPath);
     LONG r = RegDeleteTreeW(hive, wPath.c_str());
     if (r == ERROR_SUCCESS) return true;

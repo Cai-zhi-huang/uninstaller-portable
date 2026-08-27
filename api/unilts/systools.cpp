@@ -59,7 +59,13 @@ ll informat::getsize(std::string& path){
             }
             ++entryCount;
             if (fs::is_regular_file(entry.symlink_status())) {
-                totalSize += fs::file_size(entry.path());
+                // 单文件 file_size 可能因权限/文件在遍历中消失而抛异常；隔离到单文件，
+                // 避免一个坏文件中断整个遍历导致大小统计不完整。
+                try {
+                    totalSize += fs::file_size(entry.path());
+                }
+                catch (...) {
+                }
                 if (++fileCount >= kMaxFiles) break;
             }
             // 定期泵事件 + 检查时间，避免在单个目录上连续阻塞导致“未响应”
