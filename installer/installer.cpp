@@ -151,7 +151,11 @@ static int DoInstall() {
     }
 
     wchar_t local[MAX_PATH];
-    SHGetFolderPathW(nullptr, CSIDL_LOCAL_APPDATA, nullptr, 0, local);
+    // 必须校验返回值：失败时 local 为未初始化栈内存，std::wstring(local) 会读垃圾导致崩溃或写错路径。
+    if (SHGetFolderPathW(nullptr, CSIDL_LOCAL_APPDATA, nullptr, 0, local) != S_OK) {
+        MessageBoxW(nullptr, L"无法定位应用数据目录。", L"错误", MB_ICONERROR);
+        return 1;
+    }
     std::wstring target = std::wstring(local) + L"\\Programs\\UninstallerManager";
     MakeDirs(target);
 
@@ -184,10 +188,12 @@ static int DoInstall() {
     }
 
     wchar_t startm[MAX_PATH];
-    SHGetFolderPathW(nullptr, CSIDL_STARTMENU, nullptr, 0, startm);
-    std::wstring progDir = std::wstring(startm) + L"\\Programs";
-    MakeDirs(progDir);
-    CreateShortcut(target + L"\\uninstaller.exe", progDir + L"\\卸载管理器.lnk", target);
+    // 开始菜单快捷方式为“尽力而为”：定位失败不终止安装，仅跳过快捷方式。
+    if (SHGetFolderPathW(nullptr, CSIDL_STARTMENU, nullptr, 0, startm) == S_OK) {
+        std::wstring progDir = std::wstring(startm) + L"\\Programs";
+        MakeDirs(progDir);
+        CreateShortcut(target + L"\\uninstaller.exe", progDir + L"\\卸载管理器.lnk", target);
+    }
 
     WriteUninstallRegistry(target);
 
