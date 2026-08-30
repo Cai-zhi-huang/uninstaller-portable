@@ -11,13 +11,12 @@ IDI_APP_ICON ICON "assets/appicon.ico"
 #endif
 1 RT_MANIFEST "app.manifest"
 
-// 版本信息：与 api/ui/version.hpp 中的 APP_VERSION / APP_VERSION_SUFFIX 保持一致。
+// 版本信息：由 CMake 从 api/ui/version.hpp 的 APP_VERSION 自动注入（单一版本来源）。
 // 注意：llvm-rc 无法解析 VERSIONINFO 里的非 ASCII 字符，故此处 VALUE 使用英文/数字；
 // 文件属性中显示的版本为数字主版本（如 0.0.0），中文“试用版”后缀在窗口标题与“关于”中展示。
-// 更新版本号时请同步修改 version.hpp 与下面的 FILEVERSION/PRODUCTVERSION/FileVersion/ProductVersion。
 VS_VERSION_INFO VERSIONINFO
- FILEVERSION 0,0,7,0
- PRODUCTVERSION 0,0,7,0
+ FILEVERSION @APP_VERSION_COMMA@
+ PRODUCTVERSION @APP_VERSION_COMMA@
  FILEFLAGSMASK 0x3fL
  FILEFLAGS 0x0L
  FILEOS 0x40004L
@@ -30,12 +29,12 @@ BEGIN
         BEGIN
             VALUE "CompanyName", "CZH720"
             VALUE "FileDescription", "Uninstaller Manager"
-            VALUE "FileVersion", "0.0.7"
+            VALUE "FileVersion", "@APP_VERSION_DOT@"
             VALUE "InternalName", "uninstaller"
             VALUE "LegalCopyright", "Copyright (C) 2026"
             VALUE "OriginalFilename", "uninstaller.exe"
             VALUE "ProductName", "Uninstaller Manager"
-            VALUE "ProductVersion", "0.0.7"
+            VALUE "ProductVersion", "@APP_VERSION_DOT@"
         END
     END
     BLOCK "VarFileInfo"

@@ -18,6 +18,13 @@
 #include <vector>
 #include <algorithm>
 
+// 版本号单一来源：编译时由 build_installer.py 从 api/ui/version.hpp 提取并注入
+//   -DUNINSTALLER_VERSION="x.y.z"；未注入时回退到占位值，避免编译失败。
+// 这样 installer 的 DisplayVersion 永远与程序版本一致，消除“手动改 3 处漏改”的陷阱。
+#ifndef UNINSTALLER_VERSION
+#define UNINSTALLER_VERSION "0.0.0"
+#endif
+
 static std::wstring Utf8ToW(const std::string& s) {
     if (s.empty()) return L"";
     int n = MultiByteToWideChar(CP_UTF8, 0, s.c_str(), (int)s.size(), nullptr, 0);
@@ -116,7 +123,7 @@ static void WriteUninstallRegistry(const std::wstring& target) {
         SetRegStr(hk, L"DisplayIcon", target + L"\\uninstaller.exe");
         SetRegStr(hk, L"InstallLocation", target);
         SetRegStr(hk, L"Publisher", L"CZH720");
-        SetRegStr(hk, L"DisplayVersion", L"0.0.7");
+        SetRegStr(hk, L"DisplayVersion", L"" UNINSTALLER_VERSION);
         DWORD one = 1;
         RegSetValueExW(hk, L"NoModify", 0, REG_DWORD, (const BYTE*)&one, sizeof(one));
         RegSetValueExW(hk, L"NoRepair", 0, REG_DWORD, (const BYTE*)&one, sizeof(one));

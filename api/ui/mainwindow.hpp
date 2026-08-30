@@ -14,6 +14,9 @@
 
 using namespace std;
 
+// 诊断日志追加（带体积上限，定义在 mainwindow.cpp）；main.cpp 自检日志复用
+void appendStartupLog(const QString& line);
+
 class UninstallerWindow : public QMainWindow // Should be QMainWindow
 {
     Q_OBJECT

@@ -41,15 +41,10 @@ int main(int argc, char *argv[])
 	// 自检：把实际加载到的语言数 + 数据来源写到 exe 同级 startup.log。
 	// 用来回答"我装的是不是最新版"——只要数对得上 108，那就是新版本。
 	{
-		const QString logPath = QCoreApplication::applicationDirPath() + QStringLiteral("/startup.log");
-		QFile f(logPath);
-		if (f.open(QIODevice::WriteOnly | QIODevice::Append | QIODevice::Text)) {
-			QTextStream ts(&f);
-			ts << QDateTime::currentDateTime().toString(Qt::ISODate)
-			   << "  langCount=" << langCount()
-			   << "  families=" << langFamilyGroups().size()
-			   << '\n';
-		}
+		const QString line = QDateTime::currentDateTime().toString(Qt::ISODate)
+			+ QStringLiteral("  langCount=") + QString::number(langCount())
+			+ QStringLiteral("  families=") + QString::number(langFamilyGroups().size());
+		appendStartupLog(line);
 	}
 
 	UninstallerWindow window;

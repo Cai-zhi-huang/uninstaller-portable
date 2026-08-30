@@ -33,6 +33,29 @@
 #include <QVector>
 #include <QJsonDocument>
 #include <QJsonObject>
+
+// 把一行诊断信息追加到 exe 同级的 startup.log；带体积上限，超过则仅保留尾部，
+// 防止每次启动追加导致日志无限增长（诊断日志失控占用/泄露历史）。
+// 同时供 main.cpp 自检日志复用，避免重复实现。
+void appendStartupLog(const QString& line) {
+    const QString logPath = QCoreApplication::applicationDirPath() + QStringLiteral("/startup.log");
+    constexpr qint64 kMaxStartLog = 64 * 1024; // 64 KB 上限
+    QFile f(logPath);
+    if (f.exists() && f.size() > kMaxStartLog) {
+        // 截断：保留最近一半内容，再追加新行
+        if (f.open(QIODevice::ReadOnly | QIODevice::Text)) {
+            const QByteArray tail = f.readAll().right(int(kMaxStartLog / 2));
+            f.close();
+            QFile w(logPath);
+            if (w.open(QIODevice::WriteOnly | QIODevice::Truncate | QIODevice::Text))
+                w.write(tail);
+        }
+    }
+    if (f.open(QIODevice::WriteOnly | QIODevice::Append | QIODevice::Text)) {
+        QTextStream ts(&f);
+        ts << line << '\n';
+    }
+}
 #include <QJsonArray>
 #include <QCryptographicHash>
 #include <QDateTime>
@@ -878,6 +901,8 @@ bool UninstallerWindow::loadSoftwareCache() {
     const QString path = QCoreApplication::applicationDirPath() + QStringLiteral("/uninstaller_cache.json");
     QFile f(path);
     if (!f.open(QIODevice::ReadOnly)) return false;
+    // 缓存体积护栏：超过 50 MB 视为异常/被投毒，丢弃回退实时扫描（避免 readAll 消耗过多内存）
+    if (f.size() > qint64(50 * 1024 * 1024)) return false;
     const QByteArray raw = f.readAll();
     QJsonDocument doc = QJsonDocument::fromJson(raw);
     if (doc.isNull() || !doc.isObject()) return false;
@@ -1959,12 +1984,8 @@ void UninstallerWindow::showUpdatePopup() {
 
     // 辅助：把弹窗诊断信息追加到 startup.log（便于排查“勾了仍弹”）
     auto logPopup = [&](const QString& msg) {
-        QFile f(QCoreApplication::applicationDirPath() + QStringLiteral("/startup.log"));
-        if (f.open(QIODevice::WriteOnly | QIODevice::Append | QIODevice::Text)) {
-            QTextStream ts(&f);
-            ts << QDateTime::currentDateTime().toString(Qt::ISODate)
-               << " [updatePopup] " << msg << "\n";
-        }
+        appendStartupLog(QDateTime::currentDateTime().toString(Qt::ISODate)
+                         + QStringLiteral(" [updatePopup] ") + msg);
     };
 
     QObject::connect(ok, &QPushButton::clicked, &dlg, &QDialog::accept);
@@ -2286,8 +2307,13 @@ void UninstallerWindow::exportSoftwareList() {
         // 写 UTF-8 BOM，使 Excel 能正确识别中文（否则默认按 ANSI 解析会乱码）。
         out.setGenerateByteOrderMark(true);
         // CSV：字段含逗号/引号/换行时按 RFC4180 用双引号包裹并转义内部引号。
+        // CWE-1236 公式注入防护：DisplayVersion/DisplayName 等来自注册表（任何安装程序可任意写入），
+        // 前导 = + - @ 会被表格软件误判为公式执行；前置单引号 ' 强制视为纯文本。
         auto csvCell = [](const QString& s) -> QString {
             QString cell = s;
+            if (!cell.isEmpty() && (cell.at(0) == QChar('=') || cell.at(0) == QChar('+') ||
+                                     cell.at(0) == QChar('-') || cell.at(0) == QChar('@')))
+                cell.prepend(QChar('\''));
             if (cell.contains(',') || cell.contains('"') || cell.contains('\n') || cell.contains('\r')) {
                 cell.replace('"', "\"\"");
                 return "\"" + cell + "\"";
@@ -2303,10 +2329,17 @@ void UninstallerWindow::exportSoftwareList() {
     } else {
         // 文本/TSV 也写 UTF-8 BOM，避免 Excel 打开中文乱码。
         out.setGenerateByteOrderMark(true);
+        // TSV 同样存在公式注入（Excel 对制表符分隔也按单元格解析），前导 = + - @ 同样前置单引号。
+        auto tsvCell = [](const QString& s) -> QString {
+            if (!s.isEmpty() && (s.at(0) == QChar('=') || s.at(0) == QChar('+') ||
+                                 s.at(0) == QChar('-') || s.at(0) == QChar('@')))
+                return QString(QChar('\'')) + s;
+            return s;
+        };
         out << "Name\tVersion\tPublisher\tInstallDate\tSize\tLocation\tStatus\tUninstallCommand\n";
         for (const auto& r : rows) {
-            out << r.name << "\t" << r.ver << "\t" << r.pub << "\t" << r.date << "\t"
-                << r.size << "\t" << r.loc << "\t" << r.status << "\t" << r.cmd << "\n";
+            out << tsvCell(r.name) << "\t" << tsvCell(r.ver) << "\t" << tsvCell(r.pub) << "\t" << tsvCell(r.date) << "\t"
+                << tsvCell(r.size) << "\t" << tsvCell(r.loc) << "\t" << tsvCell(r.status) << "\t" << tsvCell(r.cmd) << "\n";
         }
     }
     file.close();

@@ -26,6 +26,12 @@ void loadLanguageTable() {
         QFile f(path);
         if (!f.exists() || !f.open(QIODevice::ReadOnly))
             continue;
+        // DoS 护栏：外部 languages.json 体积异常大时直接跳过候选，
+        // 避免 readAll 把超大文件整个读进内存（exe 同级目录可被攻击者写入）。
+        // 16 MB 对 108+ 语言表绰绰有余，正常文件远小于此。
+        constexpr qint64 kMaxLangJsonBytes = 16 * 1024 * 1024;
+        if (f.size() > kMaxLangJsonBytes)
+            continue;
         QJsonParseError parseErr;
         const QJsonDocument doc = QJsonDocument::fromJson(f.readAll(), &parseErr);
         if (doc.isNull())

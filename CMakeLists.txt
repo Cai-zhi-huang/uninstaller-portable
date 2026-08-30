@@ -17,6 +17,24 @@ set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -fuse-ld=lld")
 
 project(${PROJECT_NAME} LANGUAGES CXX)
 
+# --- 版本号单一来源 ---
+# 从 api/ui/version.hpp 的 #define APP_VERSION "x.y.z" 提取，注入到 appicon.rc 模板，
+# 避免“手动改 3 处漏改”导致文件属性版本与程序版本不一致。
+file(READ "${CMAKE_SOURCE_DIR}/api/ui/version.hpp" _VER_HPP)
+string(REGEX MATCH "#define[ \t]+APP_VERSION[ \t]+\"([0-9.]+)\"" _VER_MATCH "${_VER_HPP}")
+if(_VER_MATCH)
+    set(APP_VERSION_DOT "${CMAKE_MATCH_1}")
+else()
+    set(APP_VERSION_DOT "0.0.0")
+endif()
+string(REPLACE "." "," APP_VERSION_COMMA "${APP_VERSION_DOT}")
+configure_file("${CMAKE_SOURCE_DIR}/appicon.rc.in"
+               "${CMAKE_BINARY_DIR}/appicon.rc" @ONLY)
+# rc 生成在构建目录，其相对路径 assets/appicon.ico / app.manifest 需在构建目录可用，
+# 故把这两个文件复制到构建目录（源码目录含中文路径，rc 解析易出错）。
+file(COPY "${CMAKE_SOURCE_DIR}/assets/appicon.ico" DESTINATION "${CMAKE_BINARY_DIR}/assets")
+file(COPY "${CMAKE_SOURCE_DIR}/app.manifest" DESTINATION "${CMAKE_BINARY_DIR}")
+
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_AUTOMOC ON)
@@ -30,8 +48,8 @@ find_package(Qt6 REQUIRED COMPONENTS Core Widgets Gui Concurrent)
 # 添加子目录
 add_subdirectory(api)
 
-# 定义主程序（附带 Windows 资源文件，包含程序图标）
-add_executable(${PROJECT_NAME} WIN32 main.cpp appicon.rc assets/appicon.qrc lang/lang.qrc)
+# 定义主程序（附带 Windows 资源文件，包含程序图标；rc 由 version.hpp 自动生成）
+add_executable(${PROJECT_NAME} WIN32 main.cpp ${CMAKE_BINARY_DIR}/appicon.rc assets/appicon.qrc lang/lang.qrc)
 
 # 链接库
 target_link_libraries(${PROJECT_NAME} PRIVATE
