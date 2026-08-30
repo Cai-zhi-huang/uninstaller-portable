@@ -33,7 +33,11 @@ Thumbs.db
 !直接用/**/*.exe
 
 # 本地工具 / 辅助脚本（构建与截图等，不纳入源码仓库）
-tools/
+tools/*
+# 例外：威胁检测套件与方案文档属于项目资产，纳入版本控制
+!tools/detection/
+!tools/detection/**
+!tools/threat_detection_plan.md
 
 # 项目笔记（WorkBuddy 本地记忆，不入库）
 .workbuddy/

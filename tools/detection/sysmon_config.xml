@@ -1,0 +1,43 @@
+<Sysmon schemaVersion="4.90">
+  <EventFiltering>
+    <!-- R4/R5: uninstaller.exe spawns a child process; alert unless the command line is on the allowlist
+         (msiexec / uninst.exe / rmdir /s /q / cmd /c). All conditions are ANDed, so a process whose
+         command line matches any allowlist entry is excluded; anything else triggers an alert. -->
+    <ProcessCreate onmatch="include">
+      <Image condition="end with">uninstaller.exe</Image>
+      <CommandLine condition="not begin with">msiexec</CommandLine>
+      <CommandLine condition="not contain">uninst.exe</CommandLine>
+      <CommandLine condition="not contain">rmdir /s /q</CommandLine>
+      <CommandLine condition="not contain">cmd.exe /c</CommandLine>
+    </ProcessCreate>
+
+    <!-- R2: uninstaller.exe loading a DLL that is NOT a system/Qt library (possible DLL side-loading). -->
+    <ImageLoad onmatch="include">
+      <Image condition="end with">uninstaller.exe</Image>
+      <ImageLoaded condition="not begin with">C:\Windows\</ImageLoaded>
+      <ImageLoaded condition="not begin with">C:\Qt\</ImageLoaded>
+      <ImageLoaded condition="not contain">Qt6</ImageLoaded>
+    </ImageLoad>
+
+    <!-- R6: any change to the Uninstall registry keys (add / delete / rename / value change). -->
+    <RegistryEvent onmatch="include">
+      <TargetObject condition="begin with">HKLM\Software\Microsoft\Windows\CurrentVersion\Uninstall</TargetObject>
+      <TargetObject condition="begin with">HKCU\Software\Microsoft\Windows\CurrentVersion\Uninstall</TargetObject>
+    </RegistryEvent>
+
+    <!-- R7: the application is offline by design; ANY outbound connection from uninstaller.exe is suspicious. -->
+    <NetworkConnect onmatch="include">
+      <Image condition="end with">uninstaller.exe</Image>
+    </NetworkConnect>
+
+    <!-- R1 (auxiliary; primary FIM is the PowerShell script): uninstaller.exe writing files inside its own
+         portable directory (possible self-modification / payload drop). -->
+    <FileCreate onmatch="include">
+      <TargetFilename condition="contains">uninstaller-portable</TargetFilename>
+      <Image condition="end with">uninstaller.exe</Image>
+    </FileCreate>
+
+    <!-- NOTE: R3 (cache integrity fail) and R8 (registry delete blocked) are emitted by the application
+         itself into detection.log and collected by fim_uninstaller.ps1 (P0), not by Sysmon. -->
+  </EventFiltering>
+</Sysmon>
