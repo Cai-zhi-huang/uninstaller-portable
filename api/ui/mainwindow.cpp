@@ -1015,6 +1015,9 @@ void UninstallerWindow::closeEvent(QCloseEvent* event) {
         if (m_tableWidget && m_tableWidget->horizontalHeader()) {
             geo.setValue(QStringLiteral("tableHeaderState"), m_tableWidget->horizontalHeader()->saveState());
         }
+        // 关键：下方 ::ExitProcess(0) 不执行 C++ 栈展开/析构，QSettings 的延迟写入
+        // 不会落盘，必须在此显式 sync()，否则窗口几何/表头状态每次退出都丢失。
+        geo.sync();
     }
 
     // 立即结束整个进程：即使后台线程/WinAPI 仍阻塞，也不给任何残留机会。
@@ -1453,6 +1456,7 @@ void UninstallerWindow::locateInRegistry() {
     QSettings lastKey("HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Applets\\Regedit",
                       QSettings::NativeFormat);
     lastKey.setValue("LastKey", key);
+    lastKey.sync();  // 确保 regedit 启动前 LastKey 已落盘，避免读到旧值/跳错位置
     QProcess::startDetached(regedit);
 }
 
