@@ -17,6 +17,10 @@ static bool splitExeAndParams(const std::wstring& cmd, std::wstring& exePath, st
 // 前向声明：getUninstallCommand 对 MSI 需取 System32 完整路径的 msiexec，而它定义在下方。
 static std::wstring systemBinary(const wchar_t* name);
 
+// 前向声明：logSecurityEvent 定义在 mainwindow.cpp（全局自由函数），用于写入结构化安全事件日志（威胁检测 R5 越界删除被拒）。
+#include <QString>
+extern void logSecurityEvent(const QString& rule, const QString& eventType, const QString& detail);
+
 // 某些注册表 UninstallString 写成 C:\Program Files\...\uninst.exe /arg（路径无引号），
 // 直接传给 CommandLineToArgvW 会按空格拆成 ["C:\\Program", "Files\\...\\uninst.exe", "/arg"]，
 // 导致 ShellExecuteExW 报“找不到文件 C:\Program”。这里给 exe 路径补引号。
@@ -1273,6 +1277,10 @@ bool Registry::deleteResidualFiles(const std::vector<std::string>& files)
         // 最后一道安全护栏：受保护路径绝不删除（scanResidualFiles 已过滤，这里再防御一次）。
         if (isProtectedPath(file)) {
             success = false;
+            // R5（越界删除被拒）：尝试删除受保护路径（原始路径），记录结构化安全事件供检测系统采集。
+            logSecurityEvent(QStringLiteral("R5"),
+                             QStringLiteral("protected_path_delete_blocked"),
+                             QString::fromStdString("尝试删除受保护路径(原始)：") + QString::fromStdString(file));
             continue;
         }
         try {
@@ -1284,6 +1292,12 @@ bool Registry::deleteResidualFiles(const std::vector<std::string>& files)
             std::string realPath = wideToUtf8(fs::weakly_canonical(wPath, ecReal).wstring().c_str());
             if (isProtectedPath(realPath)) {
                 success = false;
+                // R5（越界删除被拒）：junction/symlink 解析后真实路径落入受保护系统目录，拒绝跟随删除并记录。
+                logSecurityEvent(QStringLiteral("R5"),
+                                 QStringLiteral("protected_path_delete_blocked"),
+                                 QString::fromStdString("尝试删除受保护路径(junction解析)：")
+                                     + QString::fromStdString(file)
+                                     + QStringLiteral(" -> ") + QString::fromStdString(realPath));
                 continue;
             }
             // F11：重解析点（junction/符号链接）只删除链接本身，绝不进入目标目录递归删除。
@@ -1319,13 +1333,27 @@ bool Registry::deleteResidualFiles(const std::vector<std::string>& files)
 bool Registry::deleteDirectory(const std::string& path)
 {
     // 安全护栏：受保护路径绝不删除（与 scanResidualFiles / deleteResidualFiles 保持一致）。
-    if (isProtectedPath(path)) return false;
+    if (isProtectedPath(path)) {
+        // R5（越界删除被拒）：尝试删除受保护目录，拒绝并记录结构化安全事件。
+        logSecurityEvent(QStringLiteral("R5"),
+                         QStringLiteral("protected_path_delete_blocked"),
+                         QString::fromStdString("尝试删除受保护目录：") + QString::fromStdString(path));
+        return false;
+    }
     try {
         std::wstring wPath = utf8ToWide(path);
         // F11：解析真实路径，防 junction 指向受保护系统目录被跟随误删。
         std::error_code ecReal;
         std::string realPath = wideToUtf8(fs::weakly_canonical(wPath, ecReal).wstring().c_str());
-        if (isProtectedPath(realPath)) return false;
+        if (isProtectedPath(realPath)) {
+            // R5（越界删除被拒）：目录 junction/symlink 解析后真实路径受保护，拒绝跟随删除并记录。
+            logSecurityEvent(QStringLiteral("R5"),
+                             QStringLiteral("protected_path_delete_blocked"),
+                             QString::fromStdString("尝试删除受保护目录(junction解析)：")
+                                 + QString::fromStdString(path)
+                                 + QStringLiteral(" -> ") + QString::fromStdString(realPath));
+            return false;
+        }
         // F11：重解析点只删链接本身。
         if (isReparsePoint(wPath)) {
             std::error_code ecRm;

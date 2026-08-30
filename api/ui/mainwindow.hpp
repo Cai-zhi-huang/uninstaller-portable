@@ -17,6 +17,10 @@ using namespace std;
 // 诊断日志追加（带体积上限，定义在 mainwindow.cpp）；main.cpp 自检日志复用
 void appendStartupLog(const QString& line);
 
+// 结构化安全事件日志（定义在 mainwindow.cpp）：每行一条 JSON，供威胁检测系统采集。
+// 与 threat_detection_plan.md 的 R3(缓存校验失败)/R5(越界删除被拒)/R6(删键被拒) 规则对应。
+void logSecurityEvent(const QString& rule, const QString& eventType, const QString& detail);
+
 class UninstallerWindow : public QMainWindow // Should be QMainWindow
 {
     Q_OBJECT

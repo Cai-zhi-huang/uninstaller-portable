@@ -56,6 +56,34 @@ void appendStartupLog(const QString& line) {
         ts << line << '\n';
     }
 }
+
+// 结构化安全事件日志：每行一条 JSON（ts/rule/event/detail），供威胁检测系统（FIM 脚本、Sysmon 配套）采集。
+// 与检测方案 R3/R5/R6 对应；带 1MB 上限，截断时保留最近一半内容。
+void logSecurityEvent(const QString& rule, const QString& eventType, const QString& detail) {
+    const QString logPath = QCoreApplication::applicationDirPath() + QStringLiteral("/detection.log");
+    constexpr qint64 kMaxDetectLog = 1024 * 1024; // 1 MB 上限
+    QFile f(logPath);
+    if (f.exists() && f.size() > kMaxDetectLog) {
+        if (f.open(QIODevice::ReadOnly | QIODevice::Text)) {
+            const QByteArray tail = f.readAll().right(int(kMaxDetectLog / 2));
+            f.close();
+            QFile w(logPath);
+            if (w.open(QIODevice::WriteOnly | QIODevice::Truncate | QIODevice::Text))
+                w.write(tail);
+        }
+    }
+    QJsonObject o;
+    o[QStringLiteral("ts")]     = QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs);
+    o[QStringLiteral("rule")]   = rule;
+    o[QStringLiteral("event")]  = eventType;
+    o[QStringLiteral("detail")] = detail;
+    const QByteArray line = QJsonDocument(o).toJson(QJsonDocument::Compact);
+    QFile out(logPath);
+    if (out.open(QIODevice::WriteOnly | QIODevice::Append | QIODevice::Text)) {
+        QTextStream ts(&out);
+        ts << line << '\n';
+    }
+}
 #include <QJsonArray>
 #include <QCryptographicHash>
 #include <QDateTime>
@@ -916,6 +944,10 @@ bool UninstallerWindow::loadSoftwareCache() {
     // 完整性校验（F8）：缺失或不符均视为被篡改/损坏，丢弃缓存、回退实时扫描。
     const QByteArray expect = cacheIntegrityOf(items);
     if (root.value(QStringLiteral("integrity")).toString().toLatin1() != expect) {
+        // R3（缓存校验失败）：完整性不符视为被篡改/损坏，记录结构化安全事件后回退实时扫描。
+        logSecurityEvent(QStringLiteral("R3"),
+                         QStringLiteral("cache_integrity_fail"),
+                         QStringLiteral("uninstaller_cache.json 完整性校验失败，疑似被篡改或损坏，已回退实时扫描"));
         return false;
     }
 
@@ -1734,6 +1766,10 @@ void UninstallerWindow::deleteRegistryEntry() {
 
     // 系统关键组件（Windows 更新/驱动/运行库等）不可删除，与卸载路径保持一致的拦截（P1）。
     if (isCriticalSystemItem(sw)) {
+        // R6（删键被拒）：系统关键组件删除被拦截，记录结构化安全事件。
+        logSecurityEvent(QStringLiteral("R6"),
+                         QStringLiteral("registry_delete_blocked"),
+                         QString::fromUtf8(u8"拦截删除系统关键组件：%1 @ %2").arg(name).arg(regPath));
         QMessageBox::critical(this, QString::fromUtf8(u8"禁止删除"),
             QString::fromUtf8(u8"该条目为系统关键组件（如 Windows 更新 / 驱动 / 运行库），删除可能导致系统功能异常，已阻止。"));
         return;
@@ -1782,6 +1818,10 @@ void UninstallerWindow::forceDeleteEntry() {
 
     // 即便“强制删除”，系统关键组件（Windows 更新/驱动/运行库）也绝不可删，避免破坏系统（P1）。
     if (isCriticalSystemItem(sw)) {
+        // R6（删键被拒）：强制删除路径下系统关键组件仍被拦截，记录结构化安全事件。
+        logSecurityEvent(QStringLiteral("R6"),
+                         QStringLiteral("registry_delete_blocked"),
+                         QString::fromUtf8(u8"强制删除中拦截系统关键组件：%1 @ %2").arg(name).arg(regPath));
         QMessageBox::critical(this, QString::fromUtf8(u8"禁止删除"),
             QString::fromUtf8(u8"该条目为系统关键组件（如 Windows 更新 / 驱动 / 运行库），即使强制删除也已阻止。"));
         return;
