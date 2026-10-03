@@ -18,6 +18,20 @@
 #include <QRegularExpression>
 #include <QCheckBox>
 #include <QShortcut>
+#include <QNetworkAccessManager>
+#include <QNetworkReply>
+#include <QNetworkRequest>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QDesktopServices>
+#include <QUrl>
+#include <QTimer>
+
+// 版本检查地址：绑定极空间 cpolar 隧道（http://192.168.31.128:8888 经 cpolar 暴露的公网地址）。
+// 更新检查地址：指向 GitHub Pages 上的 version.json（稳定，不随 NAS/cpolar 部署变化）。
+// 每次启动自动异步拉取（见 checkForUpdate），发现新版本会在更新弹窗追加提示横幅 + 前往下载按钮。
+// 注意：软件运行在用户本机（非校园网），访问 github.io 正常；博客给同学看的穿透走 NAS cpolar，与此无关。
+static const char* const kUpdateCheckUrl = "https://cai-zhi-huang.github.io/version.json";
 #include <QMenu>
 #include <QEvent>
 #include <QContextMenuEvent>
@@ -808,7 +822,12 @@ static const char* kLightStyleSheet = R"(
 )";
 
 
-UninstallerWindow::UninstallerWindow(QWidget* parent) : QMainWindow(parent) {}
+UninstallerWindow::UninstallerWindow(QWidget* parent) : QMainWindow(parent) {
+    // 版本检查网络管理器：随窗口生命周期存活，finished 统一路由到回调
+    m_netMgr = new QNetworkAccessManager(this);
+    connect(m_netMgr, &QNetworkAccessManager::finished,
+            this, &UninstallerWindow::onVersionReplyFinished);
+}
 
 void UninstallerWindow::updateFindList() {
     findlist.clear();
@@ -858,6 +877,7 @@ void UninstallerWindow::run() {
         }
     }
     show();
+    checkForUpdate();    // 启动即异步拉取最新版本（不阻塞界面，结果写回更新弹窗）
     showUpdatePopup();   // 启动即弹出更新日志
 }
 
@@ -1969,9 +1989,14 @@ QString UninstallerWindow::loadChangelogLatest() {
         if (s.startsWith(QLatin1Char('>'))) s = s.mid(1).trimmed();
         if (s.startsWith(QStringLiteral("### "))) s = s.mid(4).trimmed();
         if (s.startsWith(QLatin1Char('#'))) s = s.mid(1).trimmed();
+        // 列表项 "- " 换成圆点，更符合弹窗内纯文本排版
+        if (s.startsWith(QStringLiteral("- "))) s = QStringLiteral("• ") + s.mid(2);
         out += s + QChar('\n');
     }
     out = out.trimmed();
+    // 剥掉行内 Markdown 修饰符：粗体星号与行内代码反引号，纯文本里只会显得杂乱
+    out.remove(QLatin1Char('*'));
+    out.remove(QLatin1Char('`'));
     return out.isEmpty() ? fallback : out;
 }
 
@@ -2001,6 +2026,8 @@ void UninstallerWindow::showUpdatePopup() {
         "QPushButton:hover { background-color:#4f7ef5; }");
 
     QVBoxLayout* layout = new QVBoxLayout(&dlg);
+    m_updateDlg = &dlg;       // 供版本检查回调在弹窗仍打开时追加“新版本”提示
+    m_updateLayout = layout;
 
     QLabel* title = new QLabel(QString::fromUtf8(u8"卸载管理器 %1").arg(appVersionFull()), &dlg);
     title->setStyleSheet("font-size:18px; font-weight:bold; color:#1a1a1a;");
@@ -2013,6 +2040,9 @@ void UninstallerWindow::showUpdatePopup() {
     QTextEdit* te = new QTextEdit(&dlg);
     te->setReadOnly(true);
     te->setPlainText(loadChangelogLatest());
+    // setPlainText 可能将光标置于文末导致内容滚动到中部，强制回到顶部展示
+    te->moveCursor(QTextCursor::Start);
+    te->ensureCursorVisible();
     te->setFixedHeight(230);
     layout->addWidget(te);
 
@@ -2048,6 +2078,8 @@ void UninstallerWindow::showUpdatePopup() {
              + QStringLiteral(" match=") + (last == appVersionFull() ? QStringLiteral("yes") : QStringLiteral("no")));
 
     int rc = dlg.exec();
+    m_updateDlg = nullptr;    // 弹窗已关闭，后续到达的版本检查结果不再写入此弹窗
+    m_updateLayout = nullptr;
     if (rc == QDialog::Accepted && cb->isChecked()) {
         settings.setValue(dontShowKey, appVersionFull());
         settings.sync();
@@ -2056,6 +2088,105 @@ void UninstallerWindow::showUpdatePopup() {
         logPopup(QStringLiteral("accepted -> unchecked, nothing written"));
     } else {
         logPopup(QStringLiteral("rejected rc=") + QString::number(rc));
+    }
+}
+
+// 启动后异步拉取服务器版本信息。网络请求非阻塞（8 秒超时），
+// 结果由 onVersionReplyFinished 回调处理；弹窗打开期间若检测到新版本会就地追加提示横幅，
+// 不会拖慢主界面启动。
+void UninstallerWindow::checkForUpdate() {
+    if (!m_netMgr) return;
+    QNetworkRequest req(QUrl(QString::fromUtf8(kUpdateCheckUrl)));
+    req.setTransferTimeout(8000);
+    m_netMgr->get(req);
+}
+
+// 把 "1.2.3" / "v1.2.3" 解析为按点分隔的整数列表，便于比较
+static QList<int> parseVersion(const QString& v) {
+    QList<int> out;
+    QString body = v.trimmed();
+    if (!body.isEmpty() && (body[0] == QLatin1Char('v') || body[0] == QLatin1Char('V')))
+        body = body.mid(1);
+    for (const QString& part : body.split(QLatin1Char('.'), Qt::SkipEmptyParts)) {
+        bool ok = false;
+        int n = part.toInt(&ok);
+        out.append(ok ? n : 0);
+    }
+    return out;
+}
+
+// 返回 true 表示 remote 比本地 APP_VERSION 更新
+static bool versionIsNewer(const QString& remote) {
+    QList<int> a = parseVersion(remote);
+    QList<int> b = parseVersion(QStringLiteral(APP_VERSION));
+    const int n = qMax(a.size(), b.size());
+    for (int i = 0; i < n; ++i) {
+        const int x = (i < a.size()) ? a[i] : 0;
+        const int y = (i < b.size()) ? b[i] : 0;
+        if (x != y) return x > y;
+    }
+    return false;
+}
+
+void UninstallerWindow::onVersionReplyFinished(QNetworkReply* reply) {
+    if (!reply) return;
+    const bool ok = (reply->error() == QNetworkReply::NoError);
+    const QString errStr = reply->errorString();
+    const QByteArray data = ok ? reply->readAll() : QByteArray();
+    reply->deleteLater();
+    if (!ok) {
+        appendStartupLog(QDateTime::currentDateTime().toString(Qt::ISODate)
+                         + QStringLiteral(" [updateCheck] network error=") + errStr);
+        return;
+    }
+
+    QJsonParseError perr;
+    const QJsonDocument doc = QJsonDocument::fromJson(data, &perr);
+    if (perr.error != QJsonParseError::NoError || !doc.isObject()) {
+        appendStartupLog(QDateTime::currentDateTime().toString(Qt::ISODate)
+                         + QStringLiteral(" [updateCheck] json parse error"));
+        return;
+    }
+    const QJsonObject obj = doc.object();
+    const QString latest = obj.value(QStringLiteral("latest_version")).toString();
+    if (latest.isEmpty()) return;
+
+    // 仅在发现更新版本、且更新弹窗仍打开时，追加提示横幅 + 下载按钮
+    if (versionIsNewer(latest) && m_updateDlg && m_updateLayout) {
+        const QString dl = obj.value(QStringLiteral("download_url")).toString();
+        const QString note = obj.value(QStringLiteral("changelog")).toString();
+
+        QWidget* banner = new QWidget(m_updateDlg);
+        banner->setStyleSheet(
+            "QWidget{background-color:#eaf1ff;border:1px solid #b9d0ff;border-radius:6px;}"
+            "QLabel{color:#10316b;}");
+        QVBoxLayout* bl = new QVBoxLayout(banner);
+        bl->setContentsMargins(12, 10, 12, 10);
+        QLabel* title = new QLabel(
+            QString::fromUtf8(u8"发现新版本 %1（当前 %2）").arg(latest).arg(appVersionFull()), banner);
+        title->setStyleSheet("font-weight:bold;font-size:14px;color:#10316b;");
+        bl->addWidget(title);
+        if (!note.isEmpty()) {
+            QLabel* body = new QLabel(note, banner);
+            body->setWordWrap(true);
+            bl->addWidget(body);
+        }
+        if (!dl.isEmpty()) {
+            QPushButton* dlBtn = new QPushButton(QString::fromUtf8(u8"前往下载"), banner);
+            dlBtn->setStyleSheet(
+                "QPushButton{background-color:#3a6df0;color:#fff;border:none;border-radius:6px;"
+                "padding:6px 16px;font-size:13px;} QPushButton:hover{background-color:#4f7ef5;}");
+            connect(dlBtn, &QPushButton::clicked, banner, [dl]() {
+                QDesktopServices::openUrl(QUrl(dl));
+            });
+            bl->addWidget(dlBtn);
+        }
+        m_updateLayout->insertWidget(m_updateLayout->count() - 1, banner); // 插到“不再提示”复选框前
+        appendStartupLog(QDateTime::currentDateTime().toString(Qt::ISODate)
+                         + QStringLiteral(" [updateCheck] newer version shown: ") + latest);
+    } else {
+        appendStartupLog(QDateTime::currentDateTime().toString(Qt::ISODate)
+                         + QStringLiteral(" [updateCheck] up to date (latest=") + latest + QStringLiteral(")"));
     }
 }
 
@@ -2810,7 +2941,7 @@ void UninstallerWindow::buildLanguageMenuItems() {
     // 所以"其他"只在这里 addMenu 一次。
     for (const QString& primary : groups) {
         if (byGroup.value(primary).isEmpty()) continue;             // 该 primary 下没有语言就跳过
-        QMenu* sub = m_langMenu->addMenu(primary);
+        QMenu* sub = m_langMenu->addMenu(langRegionName(primary, G.LANGUAGE));
         const QList<int>& idxs = byGroup.value(primary);
         QString prevSubFamily;
         for (int idx : idxs) {
@@ -2830,7 +2961,7 @@ void UninstallerWindow::buildLanguageMenuItems() {
 
     // 空 family 兜底菜单（正常 JSON 下应当为空，避免重复"其他"的关键就在这里）
     if (!unfam.isEmpty()) {
-        QMenu* other = m_langMenu->addMenu(QStringLiteral("其他"));
+        QMenu* other = m_langMenu->addMenu(langRegionName(QStringLiteral("其他"), G.LANGUAGE));
         for (int idx : unfam) {
             QAction* a = other->addAction(langName(idx, G.LANGUAGE));
             a->setCheckable(true);

@@ -4,6 +4,7 @@
 #include <QJsonObject>
 #include <QJsonArray>
 #include <QCoreApplication>
+#include <utility>
 
 constexpr QStringView NONETEXT { u"" };
 
@@ -14,6 +15,8 @@ static std::vector<std::vector<QString>>     g_table;
 // 语言名翻译表：nameTable[display][target] = 用 display 语言写成的 target 语言名。
 // 与 JSON 的 nameTable 二维数组对应；缺失时 langName(i, uiLang) 会回退到母语名称。
 static std::vector<std::vector<QString>>     g_nameTable;
+// 大区名翻译表：regionTable[原始大区名][uiLang] = 译文，来自 JSON 的 regions 对象。
+static std::vector<std::pair<QString, std::vector<QString>>> g_regionTable;
 
 void loadLanguageTable() {
     // 查找顺序：1) exe 同级目录的 lang/languages.json（可被外部文件覆盖，方便增删语言）
@@ -85,6 +88,17 @@ void loadLanguageTable() {
             g_langFamilies = std::move(fams);
             g_table        = std::move(table);
             g_nameTable    = std::move(ntable);
+            // regions 是可选字段：{"欧洲": ["Europe", "欧洲", ...], ...}，
+            // 数组下标与 languages 一一对应；缺失时 langRegionName 回退原始名。
+            g_regionTable.clear();
+            const QJsonObject regions = obj.value(QLatin1String("regions")).toObject();
+            for (auto it = regions.begin(); it != regions.end(); ++it) {
+                const QJsonArray arr = it.value().toArray();
+                std::vector<QString> row;
+                row.reserve(arr.size());
+                for (const QJsonValue& v : arr) row.push_back(v.toString());
+                g_regionTable.emplace_back(it.key(), std::move(row));
+            }
             return;
         }
     }
@@ -128,6 +142,22 @@ QStringList langFamilyGroups() {
         if (!seen.contains(primary)) seen.append(primary);
     }
     return seen;
+}
+
+QString langRegionName(const QString& primary, int uiLang) {
+    const auto find = [&]() -> const std::vector<QString>* {
+        for (const auto& [name, row] : g_regionTable)
+            if (name == primary) return &row;
+        return nullptr;
+    }();
+    if (!find) return primary;
+    const std::vector<QString>& row = *find;
+    // 回退链：界面语言译文 → 英语译文 → 原始名
+    if (uiLang >= 0 && uiLang < static_cast<int>(row.size())
+        && !row[static_cast<size_t>(uiLang)].isEmpty())
+        return row[static_cast<size_t>(uiLang)];
+    if (!row.empty() && !row[0].isEmpty()) return row[0];
+    return primary;
 }
 
 QStringView getlang(uint id, uint type) {

@@ -202,12 +202,18 @@ static int DoInstall() {
         CreateShortcut(target + L"\\uninstaller.exe", progDir + L"\\卸载管理器.lnk", target);
     }
 
+    wchar_t desk[MAX_PATH];
+    // 桌面快捷方式同样“尽力而为”：定位失败不终止安装，仅跳过。
+    if (SHGetFolderPathW(nullptr, CSIDL_DESKTOPDIRECTORY, nullptr, 0, desk) == S_OK) {
+        CreateShortcut(target + L"\\uninstaller.exe", std::wstring(desk) + L"\\卸载管理器.lnk", target);
+    }
+
     WriteUninstallRegistry(target);
 
     ShellExecuteW(nullptr, L"open", (target + L"\\uninstaller.exe").c_str(), nullptr, target.c_str(), SW_SHOW);
 
     MessageBoxW(nullptr,
-        L"安装完成。\n\n可在「开始」菜单搜索“卸载管理器”，或在「设置 ▸ 应用 ▸ 已安装的应用」中找到并卸载。",
+        L"安装完成。\n\n已在「桌面」与「开始」菜单创建“卸载管理器”快捷方式；\n也可在「设置 ▸ 应用 ▸ 已安装的应用」中找到并卸载。",
         L"安装成功", MB_ICONINFORMATION);
 
     if (!allWritten) {

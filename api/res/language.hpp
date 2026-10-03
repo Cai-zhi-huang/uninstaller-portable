@@ -34,5 +34,11 @@ QString langFamily(int i);
 // 尚未加载或所有 family 为空则返回空列表。
 QStringList langFamilyGroups();
 
+// 一级大区名按界面语言翻译后显示。primary 为 langFamilyGroups() 返回的原始
+// 大区名（中文，如 "欧洲"）；翻译取自 languages.json 的 regions 表
+// （{"欧洲": ["Europe", "欧洲", ...], ...}，数组下标与 languages 一一对应）。
+// 缺失时回退：界面语言译文 → 英语译文 → 原始名。
+QString langRegionName(const QString& primary, int uiLang);
+
 // 取第 id 条文案、第 type 种语言的译文；type 省略时取当前语言 G.LANGUAGE
 QStringView getlang(uint id, uint type = 0xffffffffu);

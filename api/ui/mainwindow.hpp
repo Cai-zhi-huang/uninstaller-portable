@@ -10,6 +10,10 @@
 #include "qt.hpp"
 #include <QCloseEvent>
 
+class QNetworkAccessManager;
+class QNetworkReply;
+class QVBoxLayout;
+
 #include <vector>
 
 using namespace std;
@@ -56,6 +60,8 @@ private slots:
     void setTheme(int t);                       //切换亮/暗主题（0: 亮, 1: 暗）
     void batchUninstall();                      //批量卸载选中项
     void batchDeleteResiduals();                //批量删除选中项的残留
+    void checkForUpdate();                      //启动后异步拉取服务器版本信息（不阻塞界面）
+    void onVersionReplyFinished(QNetworkReply* reply); // 版本检查网络回调
 
 private:
     void setupUI();
@@ -70,6 +76,9 @@ private:
     void showDetailDialog(int row);             // 软件详情对话框（列出信息 + 功能按钮）
     void showUpdatePopup();                     // 启动时的更新日志弹窗（一打开主界面即弹出）
     QString loadChangelogLatest();               // 从 CHANGELOG.md 解析最新版本段（回退内置文案）
+    QNetworkAccessManager* m_netMgr{ nullptr };  // 版本检查用的网络管理器（随窗口生命周期）
+    QDialog* m_updateDlg{ nullptr };             // 当前打开的更新弹窗（网络回调据此追加新版本提示）
+    QVBoxLayout* m_updateLayout{ nullptr };      // 更新弹窗的主布局（用于追加横幅）
     void closeEvent(QCloseEvent* event) override; // 关闭前台即关闭整个程序（含后台），不缩托盘
     bool isCriticalSystemItem(const SoftwareInfo* sw) const; // 系统关键项（更新/驱动/系统组件）拦截
     UninstallResult doUninstall(SoftwareInfo* software, bool showProgress = true); // 执行单个卸载（不含确认/预览），单条与批量共用
