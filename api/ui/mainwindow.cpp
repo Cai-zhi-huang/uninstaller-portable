@@ -26,6 +26,7 @@
 #include <QDesktopServices>
 #include <QUrl>
 #include <QTimer>
+#include <algorithm>
 
 // 版本检查地址：绑定极空间 cpolar 隧道（http://192.168.31.128:8888 经 cpolar 暴露的公网地址）。
 // 更新检查地址：指向 GitHub Pages 上的 version.json（稳定，不随 NAS/cpolar 部署变化）。
@@ -311,6 +312,16 @@ static QString stripCommandQuotes(QString s) {
 // ② 在调用 ExtractIconExW 前先用 informat::volumeAccessState 判断卷是否可访问：
 // 若卷只读/被锁定/无权限，直接跳过，避免 ExtractIconExW 在无法访问的卷上阻塞或报错
 // （这正是“加载进度条时访问文件出问题”的典型成因）。
+// 图标链路诊断：exe 同级存在 icon_debug.on 标记文件时把提取过程逐环追加到
+// 同级 startup.log，用于排查「列表图标全是默认图标」一类问题；
+// 删除标记文件即关闭，正常使用零额外磁盘写入。
+static void logIconStep(const QString& line) {
+    static const bool enabled = QFileInfo::exists(
+        QCoreApplication::applicationDirPath() + QStringLiteral("/icon_debug.on"));
+    if (!enabled) return;
+    appendStartupLog(QStringLiteral("[icon] ") + line);
+}
+
 static QImage extractIconImage(const QString& filePath, int index = 0) {
     if (filePath.isEmpty()) return QImage();
 
@@ -321,7 +332,23 @@ static QImage extractIconImage(const QString& filePath, int index = 0) {
         // 独立图片文件：直接用 QImage 加载（QImage 线程安全）。
         QImage img(filePath);
         if (!img.isNull() && imageHasVisiblePixels(img)) return img;
-        return QImage();
+        // 加载失败不再直接放弃：部分软件（如 Adobe）把 PE 文件伪装成 .ico 写进
+        // ProductIcon，QImage 读不了但 ExtractIconExW 能抽；落到下方可执行分支再试。
+        logIconStep(QStringLiteral("img-load miss '%1'").arg(filePath));
+    }
+
+    // 无扩展名 / 非可执行扩展名的文件（如 MSI ProductIcon 常见的
+    // C:\Windows\Installer\{GUID}\ProductIcon 无扩展名 ico）：QImage 按内容嗅探加载。
+    // 限 8MB 防止把大文件当图片读；exe/dll 等可执行格式交给 ExtractIconExW。
+    QFileInfo fiChk(filePath);
+    if (fiChk.exists()) {
+        QString suf = fiChk.suffix().toLower();
+        static const QStringList kPeExt = {
+            "exe", "dll", "ocx", "cpl", "scr", "icl", "mui", "drv", "sys", "ime", "fon"};
+        if (!kPeExt.contains(suf) && fiChk.size() <= 8 * 1024 * 1024) {
+            QImage img(filePath);
+            if (!img.isNull() && imageHasVisiblePixels(img)) return img;
+        }
     }
 
     // 可执行文件：锁定/只读卷直接跳过，避免 ExtractIconExW 阻塞。
@@ -363,11 +390,58 @@ static QIcon iconFromFile(const QString& filePath, int index = 0) {
     return QIcon();
 }
 
-// 从 SoftwareInfo::displayIcon（如 "C:\app.exe" 或 "C:\app.dll,-123"）提取图标。
-// DisplayIcon 经常被加上双引号，提取前先去掉，否则 ExtractIconExW 会失败。
 // 从 SoftwareInfo::displayIcon 提取图标；缺失或失败时再尝试安装目录 exe、
 // 卸载命令 exe，最后回退到确定可见的默认应用图标，避免列表出现空白图标。
 static QString extractExePath(const QString& cmd); // 前向声明（定义在文件下方）
+
+// MSI 产品图标兜底：读 HKLM\SOFTWARE\Classes\Installer\Products\<压缩GUID>\ProductIcon。
+// 很多 MSI 安装（Adobe/NVIDIA/Java 等）的 Uninstall 键没有 DisplayIcon，
+// 只有 Installer\Products 里有 ProductIcon（可能是 .ico、无扩展名 ico 或指向 exe）。
+// 把标准 GUID 转成 Windows Installer 的压缩格式：前 3 段逐字符反转，后 2 段每 2 字符交换。
+static QString msiProductIconPath(const SoftwareInfo* sw) {
+    if (!sw || sw->regPath.empty()) return QString();
+    size_t slash = sw->regPath.find_last_of("\\/");
+    std::string leaf = (slash == std::string::npos) ? sw->regPath : sw->regPath.substr(slash + 1);
+    if (leaf.size() < 2 || leaf.front() != '{' || leaf.back() != '}') return QString();
+    std::string g;
+    for (char c : leaf.substr(1, leaf.size() - 2))
+        if (c != '-') g += c;   // 去掉连字符：regPath 叶子是带「-」的 GUID，压缩格式要 32 位纯 hex
+    if (g.size() != 32) return QString();
+    std::string sq;
+    for (size_t i = 8; i-- > 0;)      sq += g[i];          // 段1 反转
+    for (size_t i = 12; i-- > 8;)     sq += g[i];          // 段2 反转
+    for (size_t i = 16; i-- > 12;)    sq += g[i];          // 段3 反转
+    for (size_t i = 16; i < 32; i += 2) { sq += g[i + 1]; sq += g[i]; } // 段4/5 两两交换
+    std::string val = Registry::readString(HKEY_LOCAL_MACHINE,
+        "SOFTWARE\\Classes\\Installer\\Products\\" + sq, "ProductIcon");
+    logIconStep(QStringLiteral("msi regPath='%1' sq='%2' raw='%3'")
+                    .arg(QString::fromStdString(sw->regPath),
+                         QString::fromStdString(sq),
+                         QString::fromStdString(val)));
+    if (val.empty()) {
+        // 按用户安装的 MSI（如 Speedy）不走 HKLM，advertise 图标在
+        // %APPDATA%\Microsoft\Installer\{GUID}\ProductIcon（常为无扩展名 ico 或 exe 副本）。
+        QByteArray appData = qgetenv("APPDATA");
+        if (!appData.isEmpty()) {
+            QString perUser = QString::fromLocal8Bit(appData)
+                + "\\Microsoft\\Installer\\" + QString::fromStdString(leaf)
+                + "\\ProductIcon";
+            if (QFileInfo::exists(perUser)) {
+                logIconStep(QStringLiteral("msi per-user fallback '%1'").arg(perUser));
+                return perUser;
+            }
+        }
+        logIconStep(QStringLiteral("msi miss regPath='%1'").arg(QString::fromStdString(sw->regPath)));
+        return QString();
+    }
+    // 部分 MSI 把 ProductIcon 写成 D:\\bin\\x.exe 这类重复反斜杠，统一规整
+    QString p = QString::fromStdString(val);
+    p.replace("\\\\", "\\");
+    return p.trimmed();
+}
+
+// 从 SoftwareInfo::displayIcon（如 "C:\app.exe" 或 "C:\app.dll,-123"）提取图标。
+// DisplayIcon 经常被加上双引号，提取前先去掉，否则 ExtractIconExW 会失败。
 
 // 通过顶层窗口标题查找正在运行的进程 exe 路径，用于注册表路径过期时的图标回退。
 static QString findRunningExeByWindowTitle(const QStringList& nameKeys) {
@@ -527,15 +601,82 @@ static QImage softwareIconImage(const SoftwareInfo* sw, bool allowProcessScan, b
         }
         path = stripQuotes(path).trimmed();
         QImage img = extractIconImage(path, index);
+        logIconStep(QStringLiteral("step1 '%1' displayIcon='%2' -> %3")
+                        .arg(displayName, path, img.isNull() ? "miss" : "HIT"));
         if (!img.isNull()) return img;
     }
 
-    // 2) 安装目录里找 exe（DFS ≤2 层，fastMode 跳过以避免扫描大量文件）
-    if (!fastMode) {
+    // 1b) MSI 产品图标兜底：Uninstall 键无 DisplayIcon 时（Adobe/NVIDIA/Java 等
+    //     普遍如此），从 Installer\Products 的 ProductIcon 取（支持 .ico 与无扩展名 ico）。
+    if (!sw->regPath.empty()) {
+        QString pi = msiProductIconPath(sw);
+        if (!pi.isEmpty()) {
+            QString p = pi;
+            int ci = p.lastIndexOf(',');
+            int idx = 0;
+            if (ci != -1) {
+                bool ok = false;
+                int ii = p.mid(ci + 1).toInt(&ok);
+                if (ok) { idx = ii; p = p.left(ci); }
+            }
+            p = stripQuotes(p).trimmed();
+            QImage img = extractIconImage(p, idx);
+            logIconStep(QStringLiteral("msi 1b name='%1' pi='%2' -> imgNull=%3")
+                            .arg(QString::fromStdString(sw->displayName), p,
+                                 img.isNull() ? "Y" : "N"));
+            if (!img.isNull()) return img;
+        }
+    }
+
+    // 2) 安装目录里找 exe：完整模式 DFS ≤2 层；fastMode 只扫根层（不递归，
+    //    开销可控）——否则 DisplayIcon 失效的条目（如微信旧版指向已删路径）
+    //    在初始列表里永远只能拿到默认图标。
+    {
         QString installLoc = stripQuotes(QString::fromStdString(sw->installLocation)).trimmed();
-        for (const QString& exePath : collectInstallExes(installLoc, displayName,
-                                                         QString::fromStdString(sw->publisher).trimmed())) {
+        QStringList cands;
+        if (fastMode) {
+            QDir rootDir(installLoc);
+            if (!installLoc.isEmpty() && rootDir.exists()) {
+                const QFileInfoList fis = rootDir.entryInfoList(QStringList() << "*.exe",
+                                                                QDir::Files | QDir::NoDotAndDotDot,
+                                                                QDir::Name);
+                for (const QFileInfo& fi : fis) cands.append(fi.absoluteFilePath());
+            }
+        } else {
+            cands = collectInstallExes(installLoc, displayName,
+                                       QString::fromStdString(sw->publisher).trimmed());
+        }
+        if (!cands.isEmpty())
+            logIconStep(QStringLiteral("step2 '%1' installLoc='%2' 候选=%3 mode=%4")
+                            .arg(displayName, installLoc, QString::number(cands.size()),
+                                 fastMode ? "fast" : "full"));
+        // 辅助程序（卸载器/更新器等）不能代表软件图标，先剔除；再把与软件名
+        // 匹配的 exe 排到最前（如 Weixin 目录中 Weixin.exe 优先于 Uninstall.exe，
+        // 否则按字母序 Uninstall 会抢先命中，列表出现卸载器的图标）。
+        QStringList ranked;
+        for (const QString& c : cands) {
+            const QString bn = QFileInfo(c).baseName();
+            if (bn.contains("uninstall", Qt::CaseInsensitive) ||
+                bn.contains("update", Qt::CaseInsensitive) ||
+                bn.contains("setup", Qt::CaseInsensitive) ||
+                bn.contains("crash", Qt::CaseInsensitive) ||
+                bn.contains("report", Qt::CaseInsensitive) ||
+                bn.contains("repair", Qt::CaseInsensitive)) {
+                logIconStep(QStringLiteral("step2 '%1' 跳过辅助程序 '%2'")
+                                .arg(displayName, c));
+                continue;
+            }
+            ranked.append(c);
+        }
+        std::stable_sort(ranked.begin(), ranked.end(),
+                         [&displayName](const QString& a, const QString& b) {
+                             return QFileInfo(a).baseName().contains(displayName, Qt::CaseInsensitive)
+                                  && !QFileInfo(b).baseName().contains(displayName, Qt::CaseInsensitive);
+                         });
+        for (const QString& exePath : ranked) {
             QImage img = extractIconImage(exePath, 0);
+            logIconStep(QStringLiteral("step2 '%1' 尝试 '%2' -> %3")
+                            .arg(displayName, exePath, img.isNull() ? "miss" : "HIT"));
             if (!img.isNull()) return img;
         }
     }
@@ -545,7 +686,11 @@ static QImage softwareIconImage(const SoftwareInfo* sw, bool allowProcessScan, b
     QString exe = extractExePath(cmd);
     if (!exe.isEmpty() && QFile::exists(exe)) {
         QImage img = extractIconImage(exe, 0);
+        logIconStep(QStringLiteral("step3 '%1' '%2' -> %3")
+                        .arg(displayName, exe, img.isNull() ? "miss" : "HIT"));
         if (!img.isNull()) return img;
+    } else if (!exe.isEmpty()) {
+        logIconStep(QStringLiteral("step3 '%1' '%2' 文件不存在").arg(displayName, exe));
     }
 
     // 4) 运行中的进程 exe（fastMode 与后台线程均跳过，避免 EnumWindows 死锁/卡顿）
@@ -558,6 +703,9 @@ static QImage softwareIconImage(const SoftwareInfo* sw, bool allowProcessScan, b
             nameKeys << "微信" << "Weixin" << "WeChat";
         }
         QString runningExe = findRunningExeByWindowTitle(nameKeys);
+        logIconStep(QStringLiteral("step4 '%1' 窗口匹配='%2' 存在=%3")
+                        .arg(displayName, runningExe,
+                             QFile::exists(runningExe) ? "Y" : "N"));
         if (!runningExe.isEmpty() && QFile::exists(runningExe)) {
             QImage img = extractIconImage(runningExe, 0);
             if (!img.isNull()) return img;
@@ -599,8 +747,30 @@ static QImage softwareIconImage(const SoftwareInfo* sw, bool allowProcessScan, b
                     QFileInfoList exes = pd.entryInfoList(QStringList() << "*.exe",
                                                           QDir::Files | QDir::NoDotAndDotDot,
                                                           QDir::Name);
+                    // 过滤更新/卸载/崩溃报告等辅助程序（如腾讯
+                    // C:\ProgramData\Tencent\WeChat\WeChatUpdate.exe 会给出错误的绿方块图标），
+                    // 只取主程序候选，避免列表显示错误的图标。
+                    QFileInfoList ranked;
                     for (const QFileInfo& fi : exes) {
+                        const QString bn = fi.baseName().toLower();
+                        if (bn.contains("update") || bn.contains("uninstall") ||
+                            bn.contains("setup") || bn.contains("crash") ||
+                            bn.contains("report") || bn.contains("repair") ||
+                            bn.contains("helper") || bn.contains("launcher")) {
+                            logIconStep(QStringLiteral("step5 '%1' 跳过辅助程序 '%2'")
+                                            .arg(displayName, fi.absoluteFilePath()));
+                            continue;
+                        }
+                        ranked.append(fi);
+                    }
+                    logIconStep(QStringLiteral("step5 '%1' dir='%2' exe总数=%3 过滤后=%4")
+                                    .arg(displayName, base, QString::number(exes.size()),
+                                         QString::number(ranked.size())));
+                    for (const QFileInfo& fi : ranked) {
                         QImage img = extractIconImage(fi.absoluteFilePath(), 0);
+                        logIconStep(QStringLiteral("step5 '%1' 尝试 '%2' -> %3")
+                                        .arg(displayName, fi.absoluteFilePath(),
+                                             img.isNull() ? "miss" : "HIT"));
                         if (!img.isNull()) return img;
                     }
                 }
@@ -1336,6 +1506,13 @@ void UninstallerWindow::uninstallSelected() {
     auto software = softwareAtRow(row);
     if (!software) return;
 
+    // ⑦-0 列表里选中本程序自身：走专用自卸载流程（确认 → 启动 uninst.exe → 退出），
+    // 而不是去执行指向自身的卸载命令（那样会自我强杀，体验割裂且打断后续操作）。
+    if (software->regPath == "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\UninstallerManager") {
+        uninstallSelf();
+        return;
+    }
+
     // ⑦ 系统关键项拦截：Windows 更新 / 驱动 / 系统组件 等不允许卸载。
     if (isCriticalSystemItem(software)) {
         QMessageBox::critical(this, QString::fromUtf8(u8"无法卸载"),
@@ -1350,6 +1527,15 @@ void UninstallerWindow::uninstallSelected() {
         QMessageBox::information(this, QString::fromUtf8(u8"无法卸载"),
             QString::fromUtf8(u8"「%1」没有可用的卸载命令（卸载程序可能已不存在）。\n"
                               "若确认要清理该条目，请改用右键菜单的「删除注册表项」或「强制删除此条目」。").arg(QString::fromStdString(software->displayName)));
+        return;
+    }
+
+    // ⑦-1 卸载程序本体已不存在（残留项，isOrphaned）：执行卸载只会 ShellExecute 失败并误报“卸载失败”。
+    // 引导用户用右键菜单的「强制删除此条目」清理，而不是空跑一次卸载。
+    if (software->isOrphaned) {
+        QMessageBox::information(this, QString::fromUtf8(u8"无法卸载"),
+            QString::fromUtf8(u8"「%1」的卸载程序已不存在，这是一条残留条目（注册表项还在，但安装文件和卸载器已被删除）。\n\n"
+                              "若要清理该条目，请右键该项的「删除注册表项」或「强制删除此条目」。").arg(QString::fromStdString(software->displayName)));
         return;
     }
 
@@ -1418,16 +1604,28 @@ void UninstallerWindow::batchUninstall() {
         return;
     }
 
-    // ⑦ 过滤掉系统关键项并提示
+    // ⑦ 过滤掉系统关键项 / 残留项 / 本程序自身，并分别给出提示
     QStringList blocked;
+    QStringList orphaned;
+    bool selfIncluded = false;
     QList<SoftwareInfo*> toUninstall;
     filesize_t totalSize;
     for (auto sw : selected) {
-        if (isCriticalSystemItem(sw)) blocked.append(QString::fromStdString(sw->displayName));
-        else { toUninstall.append(sw); totalSize += sw->size.size; }
+        // 本程序自身：不能在批量里卸载（会自我强杀、打断批次），引导用菜单「卸载本程序」。
+        if (sw->regPath == "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\UninstallerManager") {
+            selfIncluded = true; continue;
+        }
+        if (isCriticalSystemItem(sw)) { blocked.append(QString::fromStdString(sw->displayName)); continue; }
+        // 残留项：卸载程序已不存在，批量执行只会误报失败；引导用右键「强制删除此条目」。
+        if (sw->isOrphaned) { orphaned.append(QString::fromStdString(sw->displayName)); continue; }
+        toUninstall.append(sw); totalSize += sw->size.size;
     }
     if (toUninstall.isEmpty()) {
-        QMessageBox::critical(this, QString::fromUtf8(u8"无法卸载"), QString::fromUtf8(u8"所选条目均为系统关键项，已阻止批量卸载。"));
+        QString msg;
+        if (selfIncluded) msg += QString::fromUtf8(u8"「卸载管理器」自身无法在批量中卸载，请用菜单「卸载本程序」。\n");
+        if (!blocked.isEmpty()) msg += QString::fromUtf8(u8"已阻止 %1 个系统关键项（Windows 更新 / 驱动 等）。\n").arg(blocked.size());
+        if (!orphaned.isEmpty()) msg += QString::fromUtf8(u8"已跳过 %1 个残留项，请用右键「强制删除此条目」清理。\n").arg(orphaned.size());
+        QMessageBox::information(this, QString::fromUtf8(u8"无法批量卸载"), msg.trimmed());
         return;
     }
 
@@ -1439,6 +1637,13 @@ void UninstallerWindow::batchUninstall() {
     if (!blocked.isEmpty()) {
         preview += QString::fromUtf8(u8"\n已跳过 %1 个系统关键项：\n").arg(blocked.size());
         for (const QString& b : blocked) preview += "• " + b + "\n";
+    }
+    if (!orphaned.isEmpty()) {
+        preview += QString::fromUtf8(u8"\n已跳过 %1 个残留项（卸载程序不存在，请用右键「强制删除此条目」）：\n").arg(orphaned.size());
+        for (const QString& b : orphaned) preview += "• " + b + "\n";
+    }
+    if (selfIncluded) {
+        preview += QString::fromUtf8(u8"\n已跳过「卸载管理器」自身（请用菜单「卸载本程序」）。\n");
     }
     QMessageBox box(this);
     box.setIcon(QMessageBox::Warning);

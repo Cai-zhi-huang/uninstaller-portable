@@ -112,16 +112,49 @@ static std::string lastRegistryKeyName(const std::string& regPath) {
 std::vector<SoftwareInfo> Registry::getAllInstalledSoftware() {
     std::vector<SoftwareInfo> softwareList;
     std::unordered_set<std::string> seenKeys;
+    std::unordered_set<std::string> seenNames;
     // 使用 place.hpp 中定义的路径
     for (const auto& [hive, path] : registryPaths) {
         std::vector<SoftwareInfo> batch;
         enumRegistrySoftware(hive, path, batch);
         for (auto& sw : batch) {
-            // 去重：64 位视图与 WOW6432Node 经常出现同名的 Windows 系统组件
+            // 去重一：64 位视图与 WOW6432Node 经常出现同名的 Windows 系统组件
             //（如 AddressBook、IE40、Fontcore），按注册表项名仅保留第一次出现的条目。
             const std::string keyName = lastRegistryKeyName(sw.regPath);
             if (!seenKeys.insert(keyName).second) continue;
+            // 去重二：不同注册表位置解析出相同显示名时只保留第一条。
+            // 典型场景：① 同一 KB 更新打到多个包（{GUID-A}.KBxxx 与 {GUID-B}.KBxxx
+            // 都解析成 "Windows Update (KBxxx)"）；② InstallShield 外壳 + MSI 内核
+            // 双注册（如 SketchUp，外壳在 WOW6432Node、MSI 在 64 位视图，同一安装目录）。
+            // 枚举顺序 HKLM64 → HKCU → WOW64 保证优先保留 64 位视图/HKCU 的条目
+            //（MSI 内核先于 InstallShield 外壳，体积/版本信息更全的那条胜出）。
+            std::string lowerName;
+            lowerName.reserve(sw.displayName.size());
+            for (char c : sw.displayName)
+                lowerName += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+            if (!seenNames.insert(lowerName).second) continue;
             softwareList.push_back(std::move(sw));
+        }
+    }
+
+    // 大小去重：NVIDIA Installer2 等安装器给几十个子组件写同一个 InstallLocation，
+    // 且注册表 EstimatedSize 全为 0，构造时每个条目各自整目录扫描 → 同一份目录被
+    // 重复计入几十次（CUDA v11.6 的 30+ 个子组件条目各显示 2.8 GB，列表总大小严重虚高）。
+    // 仅对「大小来自目录扫描（EstimatedSize 缺失/为 0）」的条目按归一化 InstallLocation
+    // 去重：同一物理目录只保留第一条的大小，其余清零；注册表自带大小的条目不受影响。
+    {
+        std::unordered_set<std::string> seenLocs;
+        for (auto& sw : softwareList) {
+            if (sw.installLocation.empty()) continue;
+            if (Registry::readDWord(sw.hive, sw.regPath, "EstimatedSize") != 0) continue;
+            std::string loc = sw.installLocation;
+            std::transform(loc.begin(), loc.end(), loc.begin(),
+                           [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+            while (loc.size() > 3 && (loc.back() == '\\' || loc.back() == '/')) loc.pop_back();
+            if (!seenLocs.insert(loc).second) {
+                ld zeroSize = 0.0;
+                sw.size = zeroSize;
+            }
         }
     }
 
@@ -446,6 +479,24 @@ static std::string resolveDisplayName(HKEY hive, const std::string& regPath, con
     for (const char* key : { "QuietDisplayName", "BundleName", "ParentDisplayName" }) {
         std::string alt = Registry::readString(hive, regPath, key);
         if (usable(alt)) return alt;
+    }
+
+    // {GUID}_suffix 形式的批量组件键（NVIDIA Installer2 给 CUDA 每个子组件都注册一条）：
+    // DisplayName 常是安装器写坏的占位符（如 ${{arpDisplayName}}），上面已判不可用。
+    // 此时用键名后缀构造可读名（cufft_11.6 → "cufft 11.6"），优于回退到无意义的
+    // 目录名（InstallLocation 末段只会得到 "v11.6"）。排除 Inno Setup 的 _is1 与
+    // 点号后缀（_Display.xxx 由下方专门分支处理），避免抢走它们的可读命名。
+    if (!fallbackKey.empty() && fallbackKey.front() == '{') {
+        const size_t close = fallbackKey.find('}');
+        if (close != std::string::npos && close + 1 < fallbackKey.size() && fallbackKey[close + 1] == '_') {
+            std::string suffix = fallbackKey.substr(close + 2);
+            std::replace(suffix.begin(), suffix.end(), '_', ' ');
+            if (!suffix.empty() && suffix != "is1" &&
+                suffix.find('.') == std::string::npos &&
+                suffix.find_first_not_of(' ') != std::string::npos) {
+                return suffix;
+            }
+        }
     }
 
     std::string loc = Registry::readString(hive, regPath, "InstallLocation");
