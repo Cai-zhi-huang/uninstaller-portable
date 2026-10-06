@@ -13,7 +13,7 @@
 //  更新版本号时请两处一起改。
 // ============================================================
 #define APP_VERSION        "0.1.0"
-#define APP_VERSION_SUFFIX "试用版"
+#define APP_VERSION_SUFFIX "正式版"
 
 inline QString appVersionFull() {
     QString s = "v" APP_VERSION;
