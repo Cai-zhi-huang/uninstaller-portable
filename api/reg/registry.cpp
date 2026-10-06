@@ -11,6 +11,12 @@
 #include <tlhelp32.h>
 #include <shellapi.h>
 #include <unordered_set>
+#include <unordered_map>
+#include <functional>
+#include <utility>
+#include <atomic>
+#include <chrono>
+#include <mutex>
 
 // 前向声明：normalizeCommandLineForArgv 会调用它，而它定义在下方。
 static bool splitExeAndParams(const std::wstring& cmd, std::wstring& exePath, std::wstring& params);
@@ -137,27 +143,6 @@ std::vector<SoftwareInfo> Registry::getAllInstalledSoftware() {
         }
     }
 
-    // 大小去重：NVIDIA Installer2 等安装器给几十个子组件写同一个 InstallLocation，
-    // 且注册表 EstimatedSize 全为 0，构造时每个条目各自整目录扫描 → 同一份目录被
-    // 重复计入几十次（CUDA v11.6 的 30+ 个子组件条目各显示 2.8 GB，列表总大小严重虚高）。
-    // 仅对「大小来自目录扫描（EstimatedSize 缺失/为 0）」的条目按归一化 InstallLocation
-    // 去重：同一物理目录只保留第一条的大小，其余清零；注册表自带大小的条目不受影响。
-    {
-        std::unordered_set<std::string> seenLocs;
-        for (auto& sw : softwareList) {
-            if (sw.installLocation.empty()) continue;
-            if (Registry::readDWord(sw.hive, sw.regPath, "EstimatedSize") != 0) continue;
-            std::string loc = sw.installLocation;
-            std::transform(loc.begin(), loc.end(), loc.begin(),
-                           [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-            while (loc.size() > 3 && (loc.back() == '\\' || loc.back() == '/')) loc.pop_back();
-            if (!seenLocs.insert(loc).second) {
-                ld zeroSize = 0.0;
-                sw.size = zeroSize;
-            }
-        }
-    }
-
     // 排序并过滤空名称
     softwareList.erase(
         std::remove_if(softwareList.begin(), softwareList.end(),
@@ -169,6 +154,22 @@ std::vector<SoftwareInfo> Registry::getAllInstalledSoftware() {
         return a.displayName < b.displayName;
     });
     return softwareList;
+}
+
+void Registry::dedupeSharedLocationSizes(std::vector<SoftwareInfo>& list) {
+    std::unordered_set<std::string> seenLocs;
+    for (auto& sw : list) {
+        if (sw.installLocation.empty()) continue;
+        if (Registry::readDWord(sw.hive, sw.regPath, "EstimatedSize") != 0) continue;
+        std::string loc = sw.installLocation;
+        std::transform(loc.begin(), loc.end(), loc.begin(),
+                       [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        while (loc.size() > 3 && (loc.back() == '\\' || loc.back() == '/')) loc.pop_back();
+        if (!seenLocs.insert(loc).second) {
+            ld zeroSize = 0.0;
+            sw.size = zeroSize;
+        }
+    }
 }
 
 void Registry::enumRegistrySoftware(
@@ -819,13 +820,95 @@ static std::string extractPrimaryExeName(const SoftwareInfo& sw) {
     return "";
 }
 
+// 扫描取消标志：主线程点「取消」后由 Registry::requestScanAbort 置位，
+// forEachEntryLimited 在遍历中定期检查，使 QtConcurrent::map 尽快收尾。
+static std::atomic<bool> g_scanAbort{false};
+
+void Registry::requestScanAbort() { g_scanAbort.store(true, std::memory_order_relaxed); }
+void Registry::resetScanAbort() { g_scanAbort.store(false, std::memory_order_relaxed); }
+
+// 深度受限的手动栈式遍历。onEntry 对每个条目调用，返回 true 表示命中并终止搜索。
+// 为什么不用 recursive_directory_iterator：increment(ec) 遇到读失败的目录会把迭代器
+// 静默置为 end，整个搜索提前终止（实测 AppData\Local 只访 10 个条目就停，导致
+// findExeOnDisk 这个兜底此前几乎从未生效）。改为显式栈遍历后，单个目录读失败
+// 只跳过该目录，其余目录继续搜。
+// 安全护栏（v0.0.9 补丁，修“扫描卡在 44%”）：
+//   1) deadline：超过时间预算立即放弃本次搜索（深度 3 的盘根扫描可能含数十万目录，
+//      之前无任何时间上限，多个无路径线索条目会把进度条卡死几分钟）；
+//   2) 每 64 个条目检查一次取消标志，点「取消」后毫秒级退出；
+//   3) skipDir 命中的目录不压栈（用于跳过 Windows/WinSxS/ProgramData/node_modules
+//      等不可能装用户程序的大目录，把盘根扫描的工作量砍掉 95%+）。
+static bool forEachEntryLimited(const std::wstring& root, int maxDepth,
+                                const std::function<bool(const fs::path&)>& onEntry,
+                                const std::chrono::steady_clock::time_point& deadline =
+                                    std::chrono::steady_clock::time_point::max(),
+                                const std::function<bool(const std::wstring&)>& skipDir = {}) {
+    std::error_code ec;
+    if (root.empty() || !fs::exists(root, ec) || !fs::is_directory(root, ec)) return false;
+    // 非固定盘（网络盘/U 盘/CD）可能极慢甚至无响应，直接跳过
+    if (root.size() >= 2 && root[1] == L':' && GetDriveTypeW(root.substr(0, 2).c_str()) != DRIVE_FIXED)
+        return false;
+    std::vector<std::pair<fs::path, int>> stack;
+    stack.push_back({fs::path(root), 0});
+    size_t ticks = 0;
+    while (!stack.empty()) {
+        const fs::path dir = stack.back().first;
+        const int depth = stack.back().second;
+        stack.pop_back();
+        fs::directory_iterator it(dir, fs::directory_options::skip_permission_denied, ec);
+        if (ec) { ec.clear(); continue; }          // 该目录打不开：只跳过它
+        for (fs::directory_iterator end; it != end; it.increment(ec)) {
+            if (ec) { ec.clear(); break; }         // 剩余项放弃，已压栈的其他目录不受影响
+            if (onEntry(it->path())) return true;
+            if ((++ticks & 63) == 0) {
+                if (g_scanAbort.load(std::memory_order_relaxed)) return false;
+                if (std::chrono::steady_clock::now() > deadline) return false;   // 时间预算耗尽
+            }
+            std::error_code ec2;
+            if (depth < maxDepth && it->is_directory(ec2) && !it->is_symlink(ec2)) {
+                if (skipDir && skipDir(it->path().filename().wstring())) continue;
+                stack.push_back({it->path(), depth + 1});   // 不跟随 junction/符号链接
+            }
+        }
+        ec.clear();
+    }
+    return false;
+}
+
+// 盘根扫描跳过的目录名（所有深度生效）：系统组件 / 海量文件的目录不可能装用户程序，
+// 跳过它们把盘根深度 3 扫描从“数十万目录、数分钟”压到“秒级”。
+static bool isSkipRootDir(const std::wstring& n) {
+    static const std::wstring skip[] = {
+        L"Windows", L"WinSxS", L"ProgramData", L"$Recycle.Bin",
+        L"System Volume Information", L"PerfLogs", L"Recovery", L"Config.Msi",
+        L"Users", L"Intel", L"AMD", L"NVIDIA", L"Docker", L"node_modules",
+        L".git", L"Recycled", L"Recycler", L"Dumps", L"temp", L"tmp",
+    };
+    for (const std::wstring& s : skip)
+        if (_wcsicmp(n.c_str(), s.c_str()) == 0) return true;
+    return false;
+}
+
 // 在磁盘常见位置有限搜索主程序 exe，返回其所在目录。
 // 搜索范围：installLocation 所在盘符的 Program Files / Program Files (x86) /
-// Users\<当前用户>\AppData\Local / Roaming，以及 installLocation 的父目录。
-// 限制最大深度 3，避免全盘递归导致卡顿。
+// Users\<当前用户>\AppData\Local / Roaming，以及 installLocation 的父目录；
+// 这些都没命中时再扫其余固定盘根目录（深度≤3）——覆盖“程序装在别的盘但注册表
+// 无任何路径线索”的场景（如微信 4.x 残缺注册项 + D 盘安装、winget 装的 per-user MSI）。
+// 限制最大深度 3 + 单条目总时间预算 2.5s + 跳过系统大目录，避免盘根扫描卡死进度条
+// （v0.0.9 补丁：此前无时间上限，KB 更新等无路径线索条目会扫全盘数分钟）。
 static std::string findExeOnDisk(const SoftwareInfo& sw) {
     std::string exeName = extractPrimaryExeName(sw);
     if (exeName.empty()) return "";
+
+    // 并发线程共享的结果缓存（键：小写主程序名；值：命中目录，空串=确定找不到）。
+    // 避免同名/相似条目（NVIDIA 子组件、多 KB 项）重复全盘搜索。
+    static std::mutex cacheMutex;
+    static std::unordered_map<std::string, std::string> cache;
+    {
+        std::lock_guard<std::mutex> lock(cacheMutex);
+        auto it = cache.find(exeName);
+        if (it != cache.end()) return it->second;
+    }
 
     // 确定搜索盘符
     std::string drive = "C:";
@@ -839,7 +922,8 @@ static std::string findExeOnDisk(const SoftwareInfo& sw) {
 
     std::vector<std::wstring> roots;
     std::wstring wDrive = utf8ToWide(drive);
-    roots.push_back(wDrive + L"\\");
+    // 顺序即优先级：per-user 应用几乎都在 AppData，先搜（几秒内命中）；
+    // 整盘根扫描最慢，放最后兜底。
     roots.push_back(wDrive + L"\\Program Files");
     roots.push_back(wDrive + L"\\Program Files (x86)");
 
@@ -857,37 +941,73 @@ static std::string findExeOnDisk(const SoftwareInfo& sw) {
         if (!parent.empty()) roots.push_back(utf8ToWide(parent));
     }
 
-    std::wstring targetExe = utf8ToWide(exeName + ".exe");
-    std::error_code ec;
-    const int maxDepth = 3;
+    roots.push_back(wDrive + L"\\");
 
-    for (const std::wstring& root : roots) {
-        if (!fs::exists(root, ec) || !fs::is_directory(root, ec)) continue;
-        try {
-            auto opts = fs::directory_options::skip_permission_denied;
-            for (auto it = fs::recursive_directory_iterator(root, opts, ec);
-                 it != fs::recursive_directory_iterator() && it.depth() <= maxDepth;
-                 it.increment(ec)) {
-                // 注意：ec 出错时仅 disable_recursion_pending + 清除错误后 continue，
-                // 由 for 增量部分的 it.increment(ec) 继续推进；绝不可在此再手动
-                // increment 一次，否则对 recursive_directory_iterator 双重 increment 是
-                // 未定义行为（迭代器可能已到 end），且会丢失 disable_recursion_pending 状态。
-                if (ec) { it.disable_recursion_pending(); ec.clear(); continue; }
-                if (it->is_regular_file(ec)) {
-                    std::wstring name = it->path().filename().wstring();
-                    std::transform(name.begin(), name.end(), name.begin(), ::towlower);
-                    std::wstring lowerTarget = targetExe;
-                    std::transform(lowerTarget.begin(), lowerTarget.end(), lowerTarget.begin(), ::towlower);
-                    if (name == lowerTarget) {
-                        return dirOfExe(it->path().string());
-                    }
-                }
+    std::wstring targetExe = utf8ToWide(exeName + ".exe");
+    std::transform(targetExe.begin(), targetExe.end(), targetExe.begin(), ::towlower);
+    const int maxDepth = 3;
+    // 单条目总时间预算：快速根（Program Files/AppData）通常毫秒级命中，
+    // 预算大头留给最慢的盘根兜底扫描。
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(2500);
+
+    auto matchIn = [&](const std::wstring& root) -> std::string {
+        std::string found;
+        forEachEntryLimited(root, maxDepth, [&](const fs::path& p) {
+            std::error_code ec3;
+            if (!fs::is_regular_file(p, ec3)) return false;
+            std::wstring name = p.filename().wstring();
+            std::transform(name.begin(), name.end(), name.begin(), ::towlower);
+            if (name == targetExe) {
+                found = wideToUtf8(p.parent_path().wstring());
+                return true;
             }
-        } catch (...) {
-            continue;
+            return false;
+        }, deadline, isSkipRootDir);
+        return found;
+    };
+
+    std::string hit;
+    for (const std::wstring& root : roots) {
+        hit = matchIn(root);
+        if (!hit.empty()) break;
+    }
+
+    // 派生盘符没找到：扫其余固定盘根（深度≤3，同样受时间预算与跳目录约束）
+    if (hit.empty() && !g_scanAbort.load(std::memory_order_relaxed) &&
+        std::chrono::steady_clock::now() < deadline) {
+        wchar_t buf[512];
+        if (GetLogicalDriveStringsW(511, buf)) {
+            for (wchar_t* p = buf; *p; p += std::wcslen(p) + 1) {
+                std::wstring d(p);
+                if (d.size() < 2 || _wcsicmp(d.c_str(), (wDrive + L"\\").c_str()) == 0) continue;
+                if (GetDriveTypeW(d.c_str()) != DRIVE_FIXED) continue;
+                hit = matchIn(d);
+                if (!hit.empty()) break;
+            }
         }
     }
-    return "";
+
+    {
+        std::lock_guard<std::mutex> lock(cacheMutex);
+        cache[exeName] = hit;   // 空串也缓存：确定找不到的下次不再扫
+    }
+    return hit;
+}
+
+// Windows 更新类条目（KBnnnnnn、Security Update 等）：没有 exe 可寻，
+// 对它们做磁盘兜底搜索纯属浪费（必然搜不到，还触发最慢的全盘扫描）。
+static bool isUpdateLikeEntry(const SoftwareInfo& sw) {
+    std::string lower = sw.displayName;
+    std::transform(lower.begin(), lower.end(), lower.begin(), ::towlower);
+    // 形如 kb123456（≥6 位数字）
+    if (lower.size() >= 8 && lower.compare(0, 2, "kb") == 0) {
+        bool allDigit = true;
+        for (size_t i = 2; i < lower.size(); ++i)
+            if (!std::isdigit(static_cast<unsigned char>(lower[i]))) { allDigit = false; break; }
+        if (allDigit) return true;
+    }
+    if (lower.rfind("security update", 0) == 0 || lower.rfind("update for", 0) == 0) return true;
+    return false;
 }
 
 // 解析软件真实安装位置。
@@ -938,7 +1058,8 @@ static std::string resolveRealInstallLocation(const SoftwareInfo& sw) {
         }
     }
 
-    // 5. 在磁盘里基于主程序名搜索
+    // 5. 在磁盘里基于主程序名搜索（更新类条目无 exe 可寻，直接跳过）
+    if (isUpdateLikeEntry(sw)) return "";
     return findExeOnDisk(sw);
 }
 
@@ -1278,7 +1399,10 @@ std::vector<std::string> Registry::scanResidualFiles(const SoftwareInfo& softwar
     std::string localApp   = knownFolder(CSIDL_LOCAL_APPDATA);
     std::string roamingApp = knownFolder(CSIDL_APPDATA);
     std::string commonApp  = knownFolder(CSIDL_COMMON_APPDATA);
-    std::string startMenu  = knownFolder(CSIDL_COMMON_STARTMENU);
+    std::string startMenu  = knownFolder(CSIDL_COMMON_STARTMENU);   // 公共开始菜单 Programs
+    std::string startMenuPerUser = knownFolder(CSIDL_STARTMENU);     // 当前用户开始菜单 Programs
+    std::string desktopPerUser   = knownFolder(CSIDL_DESKTOPDIRECTORY);       // 当前用户桌面
+    std::string desktopPublic    = knownFolder(CSIDL_COMMON_DESKTOPDIRECTORY); // 公共桌面
 
     std::vector<std::string> names;
     names.push_back(software.displayName);
@@ -1292,6 +1416,11 @@ std::vector<std::string> Registry::scanResidualFiles(const SoftwareInfo& softwar
         if (!roamingApp.empty()) addIfExists(roamingApp + "\\" + nm);
         if (!commonApp.empty())  addIfExists(commonApp + "\\" + nm);
         if (!startMenu.empty())  addIfExists(startMenu + "\\" + nm);
+        // 当前用户开始菜单程序项 + 桌面/公共桌面快捷方式（.lnk 文件），使「强制删除此条目」
+        // 能一并清掉开始菜单与桌面残留入口，而不只是清目录。
+        if (!startMenuPerUser.empty()) addIfExists(startMenuPerUser + "\\Programs\\" + nm);
+        if (!desktopPerUser.empty())   addIfExists(desktopPerUser + "\\" + nm + ".lnk");
+        if (!desktopPublic.empty())    addIfExists(desktopPublic + "\\" + nm + ".lnk");
     }
 
     // 2) 安装根目录：优先 InstallLocation；缺失时由卸载程序路径推导（不要求 exe 仍存在）
